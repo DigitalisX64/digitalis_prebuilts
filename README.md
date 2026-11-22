@@ -9,7 +9,8 @@ standard GitHub-hosted `ubuntu-24.04` runners.
 
 Each built branch publishes its own GitHub Release tagged
 `<branch>-<YYYY-MM-DD>-<bt_sha>` (for example `android17-2026-11-22-5d66dd11` or
-`android16-2026-11-22-246557a3`) containing
+`android16-2026-11-22-246557a3`) with automatically generated short release notes
+summarizing changes since the previous release on the same branch, containing
 `digitalis-prebuilts-<branch>-<YYYY-MM-DD>-<bt_sha>.tar.gz`, its `.sha256`,
 `MANIFEST.txt`, and `SOURCES.json` on the [Releases](../../releases) page.
 

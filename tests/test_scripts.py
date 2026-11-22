@@ -31,6 +31,7 @@ sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
 import check_ninja_inputs  # noqa: E402
 import fetch_aosp_libs  # noqa: E402
+import generate_release_notes  # noqa: E402
 import lock  # noqa: E402
 import package_bundle  # noqa: E402
 import parse_issue_trigger  # noqa: E402
@@ -314,6 +315,210 @@ v2026.11.22
         )
         self.assertFalse(res["should_build"])
         self.assertIn("multiple Android versions", res["reason"])
+
+
+class ReleaseNotesTests(unittest.TestCase):
+    def _sample_manifest(self, branch="android17", bt="5d66dd11", dig="8ca2d135", man="9cd17507"):
+        return {
+            "release-id": f"{branch}-2026-11-22-{bt}",
+            "branch": branch,
+            "android-release": "android17",
+            "build-date": "2026-11-22",
+            "binary_translation-sha": bt,
+            "digitalis-sha": dig,
+            "manifest-sha": man,
+            "artifact-count": "74",
+        }
+
+    def _sample_sources(self, bt="5d66dd11" + "0" * 32, dig="8ca2d135" + "0" * 32, man="9cd17507" + "0" * 32, img="16373615"):
+        return {
+            "android": "android17",
+            "aosp_images": {
+                "x86_64": {"build_id": img},
+                "arm64": {"build_id": img},
+            },
+            "manifest": {
+                "url": "https://github.com/DigitalisX64/manifest",
+                "commit": man,
+            },
+            "superproject": {"commit": "d6985d7e" + "0" * 32},
+            "clang": ["clang-r547379"],
+            "rust": ["1.82.0"],
+            "projects": {
+                "frameworks/libs/binary_translation": {
+                    "url": "https://github.com/DigitalisX64/platform_frameworks_libs_binary_translation",
+                    "commit": bt,
+                },
+                "digitalis": {
+                    "url": "https://github.com/DigitalisX64/digitalis",
+                    "commit": dig,
+                },
+            },
+        }
+
+    def test_find_previous_release_filters_branch_drafts_and_current_tag(self):
+        releases = [
+            {
+                "tag_name": "android17-2026-11-22-5d66dd11",
+                "draft": False,
+                "published_at": "2026-11-22T10:00:00Z",
+                "body": "- **Branch:** `android17`\n",
+            },
+            {
+                "tag_name": "android17-2026-11-21-ffffffff",
+                "draft": True,
+                "published_at": "2026-11-21T12:00:00Z",
+                "body": "- **Branch:** `android17`\n",
+            },
+            {
+                "tag_name": "android17-fix-foo-2026-11-21-eeeeeeee",
+                "draft": False,
+                "published_at": "2026-11-21T11:00:00Z",
+                "body": "- **Branch:** `android17-fix-foo`\n",
+            },
+            {
+                "tag_name": "android16-2026-11-21-246557a3",
+                "draft": False,
+                "published_at": "2026-11-21T10:00:00Z",
+                "body": "- **Branch:** `android16`\n",
+            },
+            {
+                "tag_name": "v2026.11.20",
+                "draft": False,
+                "published_at": "2026-11-20T10:00:00Z",
+                "body": "- **Branch:** `android17`\n",
+            },
+            {
+                "tag_name": "android17-2026-11-18-11111111",
+                "draft": False,
+                "published_at": "2026-11-18T10:00:00Z",
+                "body": "",
+            },
+        ]
+        prev = generate_release_notes.find_previous_release(
+            releases, branch="android17", current_tag="android17-2026-11-22-5d66dd11"
+        )
+        self.assertIsNotNone(prev)
+        self.assertEqual(prev["tag_name"], "v2026.11.20")
+
+        prev_16 = generate_release_notes.find_previous_release(
+            releases, branch="android16", current_tag="android16-2026-11-22-99999999"
+        )
+        self.assertEqual(prev_16["tag_name"], "android16-2026-11-21-246557a3")
+
+    def test_render_initial_release_notes(self):
+        notes = generate_release_notes.render_release_notes(
+            tag="android17-2026-11-22-5d66dd11",
+            tarball_name="digitalis-prebuilts-android17-2026-11-22-5d66dd11.tar.gz",
+            manifest=self._sample_manifest(),
+            curr_sources=self._sample_sources(),
+            prev_release=None,
+            commit_info_fn=lambda _slug, _ref: {
+                "commit": {"message": "Keep the guest linker error\n\nLong body"}
+            },
+        )
+        self.assertIn("## Changes", notes)
+        self.assertIn("Initial prebuilt release for `android17`", notes)
+        self.assertIn("Keep the guest linker error", notes)
+        self.assertIn("- **Branch:** `android17`", notes)
+        self.assertIn("- **AOSP images:** `16373615`", notes)
+
+    def test_render_diff_release_notes_with_truncation_and_platform_update(self):
+        prev_release = {
+            "tag_name": "android17-2026-11-20-e680eae6",
+            "html_url": "https://github.com/DigitalisX64/digitalis-prebuilts/releases/tag/android17-2026-11-20-e680eae6",
+            "body": "- **Branch:** `android17`\n",
+        }
+        prev_sources = self._sample_sources(
+            bt="e680eae6" + "0" * 32,
+            dig="8ca2d135" + "0" * 32,
+            man="9cd17507" + "0" * 32,
+            img="16000000",
+        )
+        curr_sources = self._sample_sources()
+
+        def fake_compare(slug, base, head):
+            self.assertEqual(slug, "DigitalisX64/platform_frameworks_libs_binary_translation")
+            self.assertTrue(base.startswith("e680eae6"))
+            self.assertTrue(head.startswith("5d66dd11"))
+            return {
+                "status": "ahead",
+                "total_commits": 3,
+                "commits": [
+                    {
+                        "sha": "11111111" + "0" * 32,
+                        "html_url": f"https://github.com/{slug}/commit/11111111",
+                        "commit": {"message": "First older change"},
+                    },
+                    {
+                        "sha": "22222222" + "0" * 32,
+                        "html_url": f"https://github.com/{slug}/commit/22222222",
+                        "commit": {"message": "Second change"},
+                    },
+                    {
+                        "sha": "5d66dd11" + "0" * 32,
+                        "html_url": f"https://github.com/{slug}/commit/5d66dd11",
+                        "commit": {"message": "Keep the guest linker error\n\nDetails"},
+                    },
+                ],
+            }
+
+        notes = generate_release_notes.render_release_notes(
+            tag="android17-2026-11-22-5d66dd11",
+            tarball_name="digitalis-prebuilts-android17-2026-11-22-5d66dd11.tar.gz",
+            manifest=self._sample_manifest(),
+            curr_sources=curr_sources,
+            prev_release=prev_release,
+            prev_sources=prev_sources,
+            compare_fn=fake_compare,
+            max_commits=2,
+        )
+        self.assertIn("Changes since [`android17-2026-11-20-e680eae6`]", notes)
+        self.assertIn("### `frameworks/libs/binary_translation`", notes)
+        # Newest commits come first; 3rd commit is summarized in overflow line.
+        self.assertLess(notes.index("Keep the guest linker error"), notes.index("Second change"))
+        self.assertNotIn("First older change", notes)
+        self.assertIn("and 1 more commit(s)", notes)
+        self.assertNotIn("### `digitalis`", notes)
+        self.assertIn("AOSP pinned images: `16000000` → `16373615`", notes)
+
+    def test_render_notes_fallback_to_body_shas_and_rebuild_message(self):
+        prev_release = {
+            "tag_name": "android17-2026-11-20-5d66dd11",
+            "html_url": "https://github.com/DigitalisX64/digitalis-prebuilts/releases/tag/android17-2026-11-20-5d66dd11",
+            "body": (
+                "- **Branch:** `android17`\n"
+                "- **`binary_translation`:** `5d66dd11`\n"
+                "- **`digitalis`:** `8ca2d135`\n"
+                "- **`manifest`:** `9cd17507`\n"
+            ),
+        }
+        notes = generate_release_notes.render_release_notes(
+            tag="android17-2026-11-22-5d66dd11",
+            tarball_name="digitalis-prebuilts-android17-2026-11-22-5d66dd11.tar.gz",
+            manifest=self._sample_manifest(),
+            curr_sources=self._sample_sources(),
+            prev_release=prev_release,
+            prev_sources=None,
+            compare_fn=lambda *_args: self.fail("compare should not be called when commits match"),
+        )
+        self.assertIn("Rebuild with the same pinned source commits", notes)
+
+    def test_render_notes_degrades_gracefully_on_compare_failure(self):
+        prev_release = {
+            "tag_name": "android17-2026-11-20-e680eae6",
+            "body": "- **Branch:** `android17`\n- **`binary_translation`:** `e680eae6`\n",
+        }
+        notes = generate_release_notes.render_release_notes(
+            tag="android17-2026-11-22-5d66dd11",
+            tarball_name="digitalis-prebuilts-android17-2026-11-22-5d66dd11.tar.gz",
+            manifest=self._sample_manifest(),
+            curr_sources=self._sample_sources(),
+            prev_release=prev_release,
+            compare_fn=lambda *_args: None,
+        )
+        self.assertIn("Updated `e680eae6` → `5d66dd11`", notes)
+        self.assertIn("/compare/e680eae6...5d66dd11", notes)
 
 
 if __name__ == "__main__":

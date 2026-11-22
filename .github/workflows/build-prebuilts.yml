@@ -372,13 +372,6 @@ jobs:
               sha256sum -c -- *.tar.gz.sha256
             )
             release_id="$(awk -F': *' '/^release-id:/{print $2}' "$dir/MANIFEST.txt")"
-            branch="$(awk -F': *' '/^branch:/{print $2}' "$dir/MANIFEST.txt")"
-            android="$(awk -F': *' '/^android-release:/{print $2}' "$dir/MANIFEST.txt")"
-            build_date="$(awk -F': *' '/^build-date:/{print $2}' "$dir/MANIFEST.txt")"
-            bt_sha="$(awk -F': *' '/^binary_translation-sha:/{print $2}' "$dir/MANIFEST.txt")"
-            dig_sha="$(awk -F': *' '/^digitalis-sha:/{print $2}' "$dir/MANIFEST.txt")"
-            manifest_sha="$(awk -F': *' '/^manifest-sha:/{print $2}' "$dir/MANIFEST.txt")"
-            count="$(awk -F': *' '/^artifact-count:/{print $2}' "$dir/MANIFEST.txt")"
             tar_files=("$dir"/*.tar.gz)
             tar_name="$(basename "${tar_files[0]}")"
 
@@ -388,19 +381,14 @@ jobs:
             fi
 
             notes_file="${dir}/release-notes.md"
-            cat > "$notes_file" <<EOF
-          # Digitalis Prebuilts (${tag})
-
-          Binary-only ARM64-to-x86_64 Digitalis translator bundle for **${android}**, built via unbundled AOSP Soong CI and verified with host tests.
-
-          - **Branch:** \`${branch}\`
-          - **Build date:** \`${build_date}\`
-          - **Archive:** \`${tar_name}\`
-          - **\`binary_translation\`:** \`${bt_sha}\`
-          - **\`digitalis\`:** \`${dig_sha}\`
-          - **\`manifest\`:** \`${manifest_sha}\`
-          - **Artifacts:** ${count}
-          EOF
+            python3 scripts/generate_release_notes.py \
+              --tag "$tag" \
+              --tarball-name "$tar_name" \
+              --manifest "$dir/MANIFEST.txt" \
+              --sources "$dir/SOURCES.json" \
+              --repo "$GITHUB_REPOSITORY" \
+              --output "$notes_file"
+            cat "$notes_file"
 
             if gh release view "$tag" >/dev/null 2>&1; then
               gh release upload "$tag" \
