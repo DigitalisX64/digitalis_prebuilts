@@ -318,6 +318,7 @@ jobs:
       contents: write
     outputs:
       release_urls: ${{ steps.publish.outputs.release_urls }}
+      releases_json: ${{ steps.publish.outputs.releases_json }}
     env:
       GH_TOKEN: ${{ github.token }}
       CUSTOM_TAG: ${{ needs.plan.outputs.release_tag }}
@@ -344,6 +345,7 @@ jobs:
           fi
 
           release_urls=()
+          summary_files=()
           for dir in "${dirs[@]}"; do
             [[ -d "$dir" ]] || continue
             (
@@ -352,7 +354,9 @@ jobs:
             )
             release_id="$(awk -F': *' '/^release-id:/{print $2}' "$dir/MANIFEST.txt")"
             tar_files=("$dir"/*.tar.gz)
-            tar_name="$(basename "${tar_files[0]}")"
+            tar_path="${tar_files[0]}"
+            tar_name="$(basename "$tar_path")"
+            sha_path="${tar_path}.sha256"
 
             tag="$release_id"
             if [[ -n "$CUSTOM_TAG" && ${#dirs[@]} -eq 1 ]]; then
@@ -360,12 +364,16 @@ jobs:
             fi
 
             notes_file="${dir}/release-notes.md"
+            summary_file="${dir}/release-summary.json"
             python3 scripts/generate_release_notes.py \
               --tag "$tag" \
               --tarball-name "$tar_name" \
+              --tarball "$tar_path" \
+              --sha256-file "$sha_path" \
               --manifest "$dir/MANIFEST.txt" \
               --sources "$dir/SOURCES.json" \
               --repo "$GITHUB_REPOSITORY" \
+              --summary-json "$summary_file" \
               --output "$notes_file"
             cat "$notes_file"
 
@@ -381,9 +389,11 @@ jobs:
                 --notes-file "$notes_file"
             fi
             release_urls+=("${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/releases/tag/${tag}")
+            summary_files+=("$summary_file")
           done
 
           printf 'release_urls=%s\n' "$(IFS=,; echo "${release_urls[*]}")" >> "$GITHUB_OUTPUT"
+          printf 'releases_json=%s\n' "$(jq -cs . "${summary_files[@]}")" >> "$GITHUB_OUTPUT"
 
   notify-issue:
     name: Report status to triggering issue
@@ -392,6 +402,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
+      contents: read
       issues: write
     env:
       GH_TOKEN: ${{ github.token }}
@@ -399,8 +410,14 @@ jobs:
       IS_PULL_REQUEST: ${{ github.event.issue.pull_request != null }}
       BUILD_RESULT: ${{ needs.build.result }}
       RELEASE_RESULT: ${{ needs.release.result }}
-      RELEASE_URLS: ${{ needs.release.outputs.release_urls }}
+      RELEASES_JSON: ${{ needs.release.outputs.releases_json }}
+      TARGETS_JSON: ${{ needs.plan.outputs.aosp_matrix }}
+      BT_REF: ${{ needs.plan.outputs.bt_ref }}
+      USE_BRANCH_HEAD: ${{ needs.plan.outputs.use_branch_head }}
+      BUILD_DATE: ${{ needs.plan.outputs.build_date }}
     steps:
+      - uses: actions/checkout@v7
+
       - name: Post final status comment and close issue on success
         run: |
           run_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
@@ -408,22 +425,23 @@ jobs:
           if [[ "$BUILD_RESULT" == "success" && ( "$RELEASE_RESULT" == "success" || "$RELEASE_RESULT" == "skipped" ) ]]; then
             succeeded="true"
           fi
-          {
-            printf 'Prebuilt build finished: **build=%s**' "$BUILD_RESULT"
-            if [[ "$RELEASE_RESULT" != "skipped" ]]; then
-              printf ', **release=%s**' "$RELEASE_RESULT"
-            fi
-            printf '\n\n- Workflow run & artifacts: %s\n' "$run_url"
-            if [[ "$RELEASE_RESULT" == "success" && -n "$RELEASE_URLS" ]]; then
-              IFS=, read -ra urls <<<"$RELEASE_URLS"
-              for u in "${urls[@]}"; do
-                printf -- '- Release: %s\n' "$u"
-              done
-            fi
-            if [[ "$succeeded" == "true" && "$IS_PULL_REQUEST" != "true" ]]; then
-              printf '\nClosing this issue automatically as completed.\n'
-            fi
-          } | gh issue comment "$ISSUE_NUMBER" --body-file -
+          close_args=()
+          if [[ "$succeeded" == "true" && "$IS_PULL_REQUEST" != "true" ]]; then
+            close_args+=(--will-close)
+          fi
+          python3 scripts/generate_release_notes.py issue-comment \
+            --build-result "$BUILD_RESULT" \
+            --release-result "$RELEASE_RESULT" \
+            --run-url "$run_url" \
+            --releases-json "${RELEASES_JSON:-[]}" \
+            --targets-json "${TARGETS_JSON:-[]}" \
+            --bt-ref "$BT_REF" \
+            --use-branch-head "$USE_BRANCH_HEAD" \
+            --build-date "$BUILD_DATE" \
+            "${close_args[@]}" \
+            --output issue-comment.md
+          cat issue-comment.md
+          gh issue comment "$ISSUE_NUMBER" --body-file issue-comment.md
           if [[ "$succeeded" == "true" && "$IS_PULL_REQUEST" != "true" ]]; then
             gh issue close "$ISSUE_NUMBER" --reason completed
           fi

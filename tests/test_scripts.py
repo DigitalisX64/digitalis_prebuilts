@@ -750,6 +750,50 @@ class ReleaseNotesTests(unittest.TestCase):
         self.assertIn("Updated `e680eae6` → `5d66dd11`", notes)
         self.assertIn("/compare/e680eae6...5d66dd11", notes)
 
+    def test_build_release_summary_and_render_issue_completion_comment(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            tar = tmp / "digitalis-prebuilts-android17-2026-11-23-5d66dd11.tar.gz"
+            tar.write_bytes(b"0" * (2 * 1024 * 1024))
+            sha = tmp / f"{tar.name}.sha256"
+            sha.write_text(f"{'a' * 64}  {tar.name}\n", encoding="utf-8")
+
+            summary = generate_release_notes.build_release_summary(
+                tag="android17-2026-11-23-5d66dd11",
+                tarball_name=tar.name,
+                manifest=self._sample_manifest(),
+                curr_sources=self._sample_sources(),
+                tarball_path=tar,
+                sha256_path=sha,
+                server_url="https://github.com",
+                repo="DigitalisX64/digitalis_prebuilts",
+            )
+            self.assertEqual(summary["tarball_size"], "2.00 MiB")
+            self.assertEqual(summary["tarball_sha256"], "a" * 64)
+            self.assertIn("/releases/tag/android17-2026-11-23-5d66dd11", summary["release_url"])
+            self.assertIn(f"/releases/download/android17-2026-11-23-5d66dd11/{tar.name}", summary["tarball_url"])
+
+            comment = generate_release_notes.render_issue_completion_comment(
+                build_result="success",
+                release_result="success",
+                run_url="https://github.com/DigitalisX64/digitalis_prebuilts/actions/runs/999",
+                releases=[summary],
+                targets=["android17"],
+                build_date="2026-11-23",
+                will_close=True,
+            )
+            self.assertIn("### Published Releases", comment)
+            self.assertIn(summary["release_url"], comment)
+            self.assertIn(summary["tarball_url"], comment)
+            self.assertIn(summary["sha256_url"], comment)
+            self.assertIn(summary["manifest_url"], comment)
+            self.assertIn(summary["sources_url"], comment)
+            self.assertIn("2.00 MiB", comment)
+            self.assertIn("a" * 64, comment)
+            self.assertIn("`binary_translation` `5d66dd11`", comment)
+            self.assertIn("AOSP images `16373615`", comment)
+            self.assertIn("Closing this issue automatically as completed.", comment)
+
 
 if __name__ == "__main__":
     unittest.main()

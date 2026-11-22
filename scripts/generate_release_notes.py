@@ -554,12 +554,229 @@ def render_release_notes(
     return "\n".join(lines)
 
 
+def _format_size(num_bytes):
+    if not isinstance(num_bytes, int) or num_bytes < 0:
+        return ""
+    if num_bytes >= 1024 * 1024:
+        return f"{num_bytes / (1024 * 1024):.2f} MiB"
+    if num_bytes >= 1024:
+        return f"{num_bytes / 1024:.1f} KiB"
+    return f"{num_bytes} B"
+
+
+def build_release_summary(
+    *,
+    tag,
+    tarball_name,
+    manifest,
+    curr_sources=None,
+    tarball_path=None,
+    sha256_path=None,
+    server_url="https://github.com",
+    repo="",
+):
+    """Build a compact metadata dict describing a published GitHub Release."""
+    branch = (
+        manifest.get("branch")
+        or manifest.get("aosp-release")
+        or manifest.get("android-release")
+        or "unknown"
+    )
+    aosp = manifest.get("aosp-release") or manifest.get("android-release") or branch
+    curr_rev = extract_revisions(sources=curr_sources, manifest=manifest)
+
+    tarball_sha256 = ""
+    if sha256_path and Path(sha256_path).is_file():
+        first = Path(sha256_path).read_text(encoding="utf-8").strip().split()
+        if first:
+            tarball_sha256 = first[0]
+
+    tarball_size = ""
+    if tarball_path and Path(tarball_path).is_file():
+        tarball_size = _format_size(Path(tarball_path).stat().st_size)
+
+    base_repo_url = f"{server_url.rstrip('/')}/{repo.strip('/')}" if repo else ""
+    tag_q = urllib.parse.quote(tag, safe="")
+    tar_q = urllib.parse.quote(tarball_name, safe="")
+    sha_q = urllib.parse.quote(f"{tarball_name}.sha256", safe="")
+
+    return {
+        "tag": tag,
+        "branch": branch,
+        "aosp": aosp,
+        "build_date": manifest.get("build-date") or "unknown",
+        "release_url": f"{base_repo_url}/releases/tag/{tag_q}" if base_repo_url else "",
+        "tarball_name": tarball_name,
+        "tarball_url": f"{base_repo_url}/releases/download/{tag_q}/{tar_q}" if base_repo_url else "",
+        "sha256_url": f"{base_repo_url}/releases/download/{tag_q}/{sha_q}" if base_repo_url else "",
+        "manifest_url": f"{base_repo_url}/releases/download/{tag_q}/MANIFEST.txt" if base_repo_url else "",
+        "sources_url": f"{base_repo_url}/releases/download/{tag_q}/SOURCES.json" if base_repo_url else "",
+        "tarball_sha256": tarball_sha256,
+        "tarball_size": tarball_size,
+        "bt_sha": manifest.get("binary_translation-sha") or "unknown",
+        "digitalis_sha": manifest.get("digitalis-sha") or "unknown",
+        "manifest_sha": manifest.get("manifest-sha") or "unknown",
+        "aosp_images": _format_aosp_build_label(curr_rev.get("aosp_images") or {}),
+        "artifact_count": manifest.get("artifact-count") or "unknown",
+    }
+
+
+def render_issue_completion_comment(
+    *,
+    build_result,
+    release_result,
+    run_url,
+    releases=(),
+    targets=(),
+    bt_ref="",
+    use_branch_head=True,
+    build_date="",
+    will_close=False,
+):
+    """Render the final status comment posted on the triggering issue before closing."""
+    status_line = f"Prebuilt build finished: **build={build_result}**"
+    if release_result and release_result != "skipped":
+        status_line += f", **release={release_result}**"
+
+    lines = [status_line, ""]
+    if targets:
+        lines.append(f"- **Targets:** `{', '.join(targets)}`")
+    if build_date:
+        lines.append(f"- **Build date:** `{build_date}`")
+    if release_result == "skipped":
+        ref_note = bt_ref or ("branch HEAD (latest)" if use_branch_head else "pinned in config/versions.json")
+        lines.append(f"- **Translator ref:** `{ref_note}`")
+    lines.append(f"- **Workflow run & artifacts:** {run_url}")
+
+    if release_result == "success" and releases:
+        lines.extend(["", "### Published Releases"])
+        for rel in releases:
+            tag = rel.get("tag") or "release"
+            rel_url = rel.get("release_url") or ""
+            heading = f"#### [`{tag}`]({rel_url})" if rel_url else f"#### `{tag}`"
+            branch = rel.get("branch") or "unknown"
+            aosp = rel.get("aosp") or branch
+            aosp_images = rel.get("aosp_images") or ""
+            branch_detail = f"`{branch}`"
+            if aosp != branch:
+                branch_detail += f" (AOSP `{aosp}`)"
+            if aosp_images:
+                branch_detail += f", AOSP images `{aosp_images}`"
+
+            tar_name = rel.get("tarball_name") or ""
+            tar_url = rel.get("tarball_url") or ""
+            tar_size = rel.get("tarball_size") or ""
+            size_suffix = f" ({tar_size})" if tar_size else ""
+            tar_link = f"[`{tar_name}`]({tar_url})" if (tar_name and tar_url) else f"`{tar_name}`"
+
+            sha256 = rel.get("tarball_sha256") or ""
+            sha_url = rel.get("sha256_url") or ""
+            manifest_url = rel.get("manifest_url") or ""
+            sources_url = rel.get("sources_url") or ""
+
+            lines.extend(
+                [
+                    "",
+                    heading,
+                    f"- **Branch:** {branch_detail}",
+                    f"- **Archive:** {tar_link}{size_suffix}",
+                ]
+            )
+            if sha256:
+                sha_suffix = f" ([.sha256]({sha_url}))" if sha_url else ""
+                lines.append(f"- **SHA-256:** `{sha256}`{sha_suffix}")
+            elif sha_url:
+                lines.append(f"- **Checksum:** [.sha256]({sha_url})")
+
+            meta_links = []
+            if manifest_url:
+                meta_links.append(f"[MANIFEST.txt]({manifest_url})")
+            if sources_url:
+                meta_links.append(f"[SOURCES.json]({sources_url})")
+            if meta_links:
+                lines.append(f"- **Metadata:** {' · '.join(meta_links)}")
+
+            lines.append(
+                f"- **Revisions:** `binary_translation` `{rel.get('bt_sha', 'unknown')}` · "
+                f"`digitalis` `{rel.get('digitalis_sha', 'unknown')}` · "
+                f"`manifest` `{rel.get('manifest_sha', 'unknown')}`"
+            )
+            lines.append(f"- **Artifacts:** {rel.get('artifact_count', 'unknown')}")
+
+    if will_close:
+        lines.extend(["", "Closing this issue automatically as completed."])
+    lines.append("")
+    return "\n".join(lines)
+
+
+def _main_issue_comment(argv):
+    ap = argparse.ArgumentParser(description="Render final issue status comment.")
+    ap.add_argument("--build-result", required=True)
+    ap.add_argument("--release-result", default="skipped")
+    ap.add_argument("--run-url", required=True)
+    ap.add_argument("--releases-json", default="[]")
+    ap.add_argument("--targets-json", default="[]")
+    ap.add_argument("--bt-ref", default="")
+    ap.add_argument("--use-branch-head", default="true")
+    ap.add_argument("--build-date", default="")
+    ap.add_argument("--will-close", action="store_true")
+    ap.add_argument("--output", type=Path)
+    args = ap.parse_args(argv)
+
+    try:
+        releases = json.loads(args.releases_json or "[]")
+    except json.JSONDecodeError:
+        releases = []
+    if not isinstance(releases, list):
+        releases = []
+
+    try:
+        targets = json.loads(args.targets_json or "[]")
+    except json.JSONDecodeError:
+        targets = []
+    if not isinstance(targets, list):
+        targets = []
+
+    comment = render_issue_completion_comment(
+        build_result=args.build_result,
+        release_result=args.release_result,
+        run_url=args.run_url,
+        releases=releases,
+        targets=targets,
+        bt_ref=args.bt_ref,
+        use_branch_head=(args.use_branch_head.lower() == "true"),
+        build_date=args.build_date,
+        will_close=args.will_close,
+    )
+    if args.output:
+        args.output.write_text(comment, encoding="utf-8")
+    else:
+        sys.stdout.write(comment)
+    return 0
+
+
 def main(argv=None):
+    raw_argv = list(sys.argv[1:] if argv is None else argv)
+    if raw_argv and raw_argv[0] == "issue-comment":
+        return _main_issue_comment(raw_argv[1:])
+
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--tag", required=True, help="release tag being published")
     ap.add_argument("--tarball-name", required=True, help="prebuilt .tar.gz filename")
     ap.add_argument("--manifest", type=Path, required=True, help="path to MANIFEST.txt")
     ap.add_argument("--sources", type=Path, help="path to SOURCES.json")
+    ap.add_argument("--tarball", type=Path, help="optional path to .tar.gz for size reporting")
+    ap.add_argument("--sha256-file", type=Path, help="optional path to .tar.gz.sha256")
+    ap.add_argument(
+        "--server-url",
+        default=os.environ.get("GITHUB_SERVER_URL", "https://github.com"),
+        help="GitHub server base URL (default: $GITHUB_SERVER_URL)",
+    )
+    ap.add_argument(
+        "--summary-json",
+        type=Path,
+        help="optional path to write compact release metadata JSON for issue reporting",
+    )
     ap.add_argument(
         "--repo",
         default=os.environ.get("GITHUB_REPOSITORY", ""),
@@ -582,7 +799,7 @@ def main(argv=None):
         action="store_true",
         help="skip GitHub API requests and emit standalone notes",
     )
-    args = ap.parse_args(argv)
+    args = ap.parse_args(raw_argv)
 
     manifest = parse_manifest(args.manifest.read_text(encoding="utf-8"))
     curr_sources = None
@@ -632,6 +849,19 @@ def main(argv=None):
         commit_info_fn=commit_info_fn,
         max_commits=args.max_commits,
     )
+
+    if args.summary_json:
+        summary = build_release_summary(
+            tag=args.tag,
+            tarball_name=args.tarball_name,
+            manifest=manifest,
+            curr_sources=curr_sources,
+            tarball_path=args.tarball,
+            sha256_path=args.sha256_file,
+            server_url=args.server_url,
+            repo=args.repo,
+        )
+        args.summary_json.write_text(json.dumps(summary) + "\n", encoding="utf-8")
 
     if args.output:
         args.output.write_text(notes, encoding="utf-8")
