@@ -1,0 +1,33 @@
+name: Handle Issue Commands
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  actions: write
+  issues: write
+
+jobs:
+  command:
+    name: Handle issue comment command
+    if: >-
+      github.event.comment.user.type != 'Bot' &&
+      (contains(github.event.comment.body, '/cancel') ||
+       contains(github.event.comment.body, '/stop') ||
+       contains(github.event.comment.body, '/abort') ||
+       contains(github.event.comment.body, '/status') ||
+       contains(github.event.comment.body, '/help'))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Run issue comment command
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 scripts/handle_issue_command.py \
+            --event-path "$GITHUB_EVENT_PATH" \
+            --repo "$GITHUB_REPOSITORY"

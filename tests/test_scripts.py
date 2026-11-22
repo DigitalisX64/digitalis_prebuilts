@@ -32,6 +32,7 @@ sys.path.insert(0, str(REPO_ROOT / "scripts"))
 import check_ninja_inputs  # noqa: E402
 import fetch_aosp_libs  # noqa: E402
 import generate_release_notes  # noqa: E402
+import handle_issue_command  # noqa: E402
 import lock  # noqa: E402
 import package_bundle  # noqa: E402
 import parse_issue_trigger  # noqa: E402
@@ -315,6 +316,213 @@ v2026.11.22
         )
         self.assertFalse(res["should_build"])
         self.assertIn("multiple Android versions", res["reason"])
+
+    def test_rebuild_and_release_comment_inherit_parent_issue_fields(self):
+        parent_body = "android: android17\nbranch: fix/foo\nrelease: true\n"
+        res = parse_issue_trigger.parse_event(
+            event_name="issue_comment",
+            author_association="OWNER",
+            title="[Build] custom fix",
+            body=parent_body,
+            comment_body="/rebuild",
+        )
+        self.assertTrue(res["should_build"])
+        self.assertEqual(res["versions"], ["android17"])
+        self.assertEqual(res["bt_ref"], "fix/foo")
+        self.assertTrue(res["publish_release"])
+
+        res_no_rel = parse_issue_trigger.parse_event(
+            event_name="issue_comment",
+            author_association="OWNER",
+            title="[Build] custom fix",
+            body=parent_body,
+            comment_body="/rebuild release=false",
+        )
+        self.assertTrue(res_no_rel["should_build"])
+        self.assertEqual(res_no_rel["versions"], ["android17"])
+        self.assertEqual(res_no_rel["bt_ref"], "fix/foo")
+        self.assertFalse(res_no_rel["publish_release"])
+
+        res_rel = parse_issue_trigger.parse_event(
+            event_name="issue_comment",
+            author_association="OWNER",
+            title="[Build] android16",
+            body="android: android16\nrelease: false\n",
+            comment_body="/release",
+        )
+        self.assertTrue(res_rel["should_build"])
+        self.assertEqual(res_rel["versions"], ["android16"])
+        self.assertTrue(res_rel["publish_release"])
+
+    def test_multiline_build_comment_with_kv_template(self):
+        res = parse_issue_trigger.parse_event(
+            event_name="issue_comment",
+            author_association="OWNER",
+            title="Trigger issue",
+            body="",
+            comment_body="/build\nandroid: android17\nbranch: fix/my-change\nrelease: true\n",
+        )
+        self.assertTrue(res["should_build"])
+        self.assertEqual(res["versions"], ["android17"])
+        self.assertEqual(res["bt_ref"], "fix/my-change")
+        self.assertTrue(res["publish_release"])
+
+    def test_parse_control_commands(self):
+        self.assertEqual(
+            parse_issue_trigger.parse_control_command(
+                author_association="NONE",
+                comment_body="/cancel",
+            )["action"],
+            "none",
+        )
+        self.assertEqual(
+            parse_issue_trigger.parse_control_command(
+                author_association="OWNER",
+                comment_body="Please do not /cancel this",
+            )["action"],
+            "none",
+        )
+        cmd = parse_issue_trigger.parse_control_command(
+            author_association="OWNER",
+            comment_body="/cancel\nWrong branch, will re-trigger with android17.",
+        )
+        self.assertEqual(cmd["action"], "cancel")
+        self.assertFalse(cmd["cancel_all"])
+        self.assertEqual(cmd["run_ids"], [])
+
+        cmd_stop = parse_issue_trigger.parse_control_command(
+            author_association="COLLABORATOR",
+            comment_body="/stop 12345 https://github.com/DigitalisX64/digitalis-prebuilts/actions/runs/67890",
+        )
+        self.assertEqual(cmd_stop["action"], "cancel")
+        self.assertEqual(cmd_stop["run_ids"], [12345, 67890])
+
+        cmd_all = parse_issue_trigger.parse_control_command(
+            author_association="MEMBER",
+            comment_body="/abort all",
+        )
+        self.assertEqual(cmd_all["action"], "cancel")
+        self.assertTrue(cmd_all["cancel_all"])
+
+        self.assertEqual(
+            parse_issue_trigger.parse_control_command(
+                author_association="OWNER",
+                comment_body="/status",
+            )["action"],
+            "status",
+        )
+        self.assertEqual(
+            parse_issue_trigger.parse_control_command(
+                author_association="OWNER",
+                comment_body="/help",
+            )["action"],
+            "help",
+        )
+
+
+class IssueCommandExecutionTests(unittest.TestCase):
+    def test_select_runs_to_cancel_isolates_issue_numbers(self):
+        runs = [
+            {
+                "id": 101,
+                "status": "in_progress",
+                "display_title": "Build prebuilts (issue #5)",
+                "html_url": "https://github.com/org/repo/actions/runs/101",
+            },
+            {
+                "id": 102,
+                "status": "queued",
+                "display_title": "Build prebuilts (issue #50)",
+                "html_url": "https://github.com/org/repo/actions/runs/102",
+            },
+            {
+                "id": 103,
+                "status": "completed",
+                "display_title": "Build prebuilts (issue #5)",
+                "html_url": "https://github.com/org/repo/actions/runs/103",
+            },
+            {
+                "id": 104,
+                "status": "queued",
+                "display_title": "Legacy run title",
+                "html_url": "https://github.com/org/repo/actions/runs/104",
+            },
+        ]
+        comment_ids = handle_issue_command.extract_run_ids_from_comments(
+            [{"body": "Workflow run: https://github.com/org/repo/actions/runs/104"}]
+        )
+        matched = handle_issue_command.select_runs_to_cancel(
+            runs, issue_number=5, comment_run_ids=comment_ids
+        )
+        self.assertEqual([r["id"] for r in matched], [101, 104])
+
+        matched_all = handle_issue_command.select_runs_to_cancel(
+            runs, issue_number=5, cancel_all=True
+        )
+        self.assertEqual([r["id"] for r in matched_all], [101, 102, 104])
+
+        matched_explicit = handle_issue_command.select_runs_to_cancel(
+            runs, issue_number=5, explicit_ids=[102]
+        )
+        self.assertEqual([r["id"] for r in matched_explicit], [102])
+
+    def test_execute_cancel_and_status_post_expected_comments(self):
+        class FakeClient:
+            def __init__(self):
+                self.cancelled = []
+                self.posted = []
+
+            def list_workflow_runs(self):
+                return [
+                    {
+                        "id": 201,
+                        "status": "in_progress",
+                        "display_title": "Build prebuilts (issue #7)",
+                        "html_url": "https://github.com/org/repo/actions/runs/201",
+                    },
+                    {
+                        "id": 200,
+                        "status": "completed",
+                        "conclusion": "success",
+                        "display_title": "Build prebuilts (issue #7)",
+                        "html_url": "https://github.com/org/repo/actions/runs/200",
+                    },
+                ]
+
+            def list_issue_comments(self, _issue_number):
+                return []
+
+            def cancel_workflow_run(self, run_id):
+                self.cancelled.append(run_id)
+                return True, "cancellation requested"
+
+            def post_issue_comment(self, issue_number, body):
+                self.posted.append((issue_number, body))
+
+        client = FakeClient()
+        handle_issue_command.execute_command(
+            {"action": "cancel", "cancel_all": False, "run_ids": []},
+            issue_number=7,
+            client=client,
+        )
+        self.assertEqual(client.cancelled, [201])
+        self.assertIn("[#201]", client.posted[-1][1])
+        self.assertIn("cancelling", client.posted[-1][1])
+
+        handle_issue_command.execute_command(
+            {"action": "status"},
+            issue_number=7,
+            client=client,
+        )
+        self.assertIn("Active build run(s) for issue #7", client.posted[-1][1])
+        self.assertIn("[#200]", client.posted[-1][1])
+
+        handle_issue_command.execute_command(
+            {"action": "help"},
+            issue_number=7,
+            client=client,
+        )
+        self.assertIn("/cancel", client.posted[-1][1])
 
 
 class ReleaseNotesTests(unittest.TestCase):

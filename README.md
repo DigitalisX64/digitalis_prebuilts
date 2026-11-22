@@ -5,6 +5,80 @@ Automated GitHub Actions CI that builds and publishes binary-only
 bundles for **Android 16 (`android16`)** and **Android 17 (`android17`)** on
 standard GitHub-hosted `ubuntu-24.04` runners.
 
+> [!TIP]
+> **Quick Trigger (Maintainers Only):**
+> Open a [Build Digitalis Prebuilts issue](../../issues/new?template=build-prebuilts.yml),
+> paste the trigger template below into any issue, or control everything with
+> `/build`, `/release`, `/rebuild`, `/cancel`, and `/status` comments on the
+> trigger issue.
+
+## Triggering & Controlling Builds via Issues and Comments
+
+### Copy-paste Issue Template
+
+Create a new issue (or use the [**Build Digitalis Prebuilts** form](../../issues/new?template=build-prebuilts.yml))
+with a body like:
+
+```yaml
+android: android17
+branch: android17
+release: true
+```
+
+Or build a custom branch / commit in `platform_frameworks_libs_binary_translation`
+without publishing a release:
+
+```yaml
+android: android17
+branch: fix/my-change
+release: false
+```
+
+Or build both `android17` and `android16` and publish one release per branch:
+
+```yaml
+android: all
+release: true
+```
+
+### Comment Commands (Everything Works via Comments)
+
+Once you have any issue (including a dedicated trigger issue), repository
+owners, members, and collaborators can trigger, re-run, inspect, and cancel
+builds purely with comments:
+
+| Comment command | Effect |
+| --- | --- |
+| `/build android17` | Build latest `android17` branch HEAD (workflow artifact only) |
+| `/build android16` | Build latest `android16` branch HEAD (workflow artifact only) |
+| `/build all` | Build both `android17` and `android16` |
+| `/build android17 release` (or `/release android17`) | Build and publish a GitHub Release (`android17-<YYYY-MM-DD>-<bt_sha>`) |
+| `/build all release` (or `/release all`) | Build both branches and publish one GitHub Release per branch |
+| `/build android17 branch=<ref> release` | Build a custom branch, tag, or SHA in `platform_frameworks_libs_binary_translation` |
+| `/build android17 release tag=<tag>` | Publish a single-branch release with a custom tag |
+| `/build android17 pinned` | Build the commit pinned in `config/versions.json` instead of live branch HEAD |
+| `/rebuild` (or bare `/build`) | Re-run the build inheriting the parent issue's target, branch, and release settings |
+| `/cancel` (aliases: `/stop`, `/abort`) | Immediately cancel active or queued build runs triggered by this issue |
+| `/cancel <run_id>` | Cancel a specific workflow run by ID (or Actions run URL) |
+| `/cancel all` | Cancel all active `Build Digitalis Prebuilts` runs in this repository |
+| `/status` | Reply with active and recent build runs for this issue |
+| `/help` | Reply with the comment command cheat sheet |
+
+You can also combine `/build` with multi-line key-value options in a comment:
+
+```text
+/build
+android: android17
+branch: fix/my-change
+release: true
+```
+
+> [!NOTE]
+> `/cancel` runs in a separate lightweight workflow
+> ([`issue-commands.yml`](.github/workflows/issue-commands.yml)) so it executes
+> immediately and is never queued behind a long-running build. Only comments
+> from `OWNER`, `MEMBER`, or `COLLABORATOR` accounts are accepted.
+
 ## Downloading prebuilts
 
 Each built branch publishes its own GitHub Release tagged
@@ -57,7 +131,7 @@ verification checklist.
 A full Digitalis AOSP checkout and build needs ~300 GB of disk. Instead of
 syncing all of AOSP, `.github/workflows/build-prebuilts.yml` performs an
 unbundled Soong-only build (`SOONG_ONLY=true`, `TARGET_BUILD_UNBUNDLED=true`,
-`ALLOW_MISSING_DEPENDENCIES=true`):
+`ALLOW_MISSING_DEPENDENCIES=true`) from scratch with zero Actions cache usage:
 
 1. Reclaims unused runner SDKs and configures a 12 GB swap file (`scripts/free-runner-disk.sh`).
 2. Fetches the pinned x86_64 and arm64 AOSP `target_files` builds from
@@ -75,15 +149,10 @@ unbundled Soong-only build (`SOONG_ONLY=true`, `TARGET_BUILD_UNBUNDLED=true`,
    `scripts/verify_bundle.py`, and upstream `verify-digitalis-prebuilts.sh`),
    then runs both host test suites (`scripts/run-host-tests.sh`).
 
-## Triggering a build or release
+## Other trigger methods
 
-- **From an Issue (maintainers only):** open an issue using the **Build Digitalis Prebuilts**
-  form (or write key-value lines such as `branch: android17`, `android: android17` +
-  `branch: <custom-branch>`, or `release: true`), or comment `/build android17`,
-  `/build android16`, `/build all`, or `/build android17 branch=<branch> release tag=v2026.11.22`
-  on any issue. CI validates the author role (`OWNER`, `MEMBER`, or `COLLABORATOR`),
-  resolves the latest HEAD of the requested branch on GitHub, posts the workflow link
-  on the issue, and reports completion status when done.
+In addition to [Issues and Comment Commands](#triggering--controlling-builds-via-issues-and-comments):
+
 - **Manual run (workflow artifact only):** run **Actions → Build Digitalis Prebuilts → Run workflow**
   (choose `all`, `android17`, or `android16`, plus optional `bt_ref` / `use_branch_head`).
 - **Manual run + GitHub Release:** set `publish_release: true` to publish one

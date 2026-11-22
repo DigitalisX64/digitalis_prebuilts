@@ -1,5 +1,8 @@
 name: Build Digitalis Prebuilts
 
+run-name: >-
+  ${{ github.event.issue.number && format('Build prebuilts (issue #{0})', github.event.issue.number) || format('Build prebuilts ({0})', github.ref_name) }}
+
 on:
   push:
     tags:
@@ -37,16 +40,18 @@ on:
         required: false
         default: ""
 
-concurrency:
-  group: build-prebuilts-${{ github.event.issue.number || github.ref }}
-  cancel-in-progress: false
-
 permissions:
   contents: read
 
 jobs:
   plan:
     name: Plan build matrix
+    if: >-
+      github.event_name != 'issue_comment' ||
+      (github.event.comment.user.type != 'Bot' &&
+       (contains(github.event.comment.body, '/build') ||
+        contains(github.event.comment.body, '/rebuild') ||
+        contains(github.event.comment.body, '/release')))
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
@@ -123,6 +128,7 @@ jobs:
           - **Translator ref:** \`${ref_note}\`
           - **Publish release:** \`${should_release}\`${rel_suffix}
           - **Workflow run:** ${run_url}
+          - **Commands:** comment \`/cancel\` to stop this build, or \`/status\` to check runs.
           EOF
             else
               echo "skipping build: $(jq -r .reason <<<"$parsed")"
@@ -164,6 +170,9 @@ jobs:
     timeout-minutes: 355
     permissions:
       contents: read
+    concurrency:
+      group: build-prebuilts-${{ matrix.android }}-${{ needs.plan.outputs.issue_number || github.ref }}
+      cancel-in-progress: false
     strategy:
       fail-fast: false
       matrix:

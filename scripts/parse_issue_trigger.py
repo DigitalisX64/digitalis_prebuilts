@@ -14,17 +14,18 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 #
-"""Parse a GitHub issue or issue comment to determine prebuilt CI parameters.
+"""Parse a GitHub issue or issue comment to determine prebuilt CI actions.
 
 Supports:
 1. GitHub Issue Forms (.github/ISSUE_TEMPLATE/build-prebuilts.yml)
 2. Key-value lines (e.g. `android: android17`, `branch: fix/foo`, `release: true`, `tag: v1.0`)
-3. Slash commands (e.g. `/build android17 branch=fix/foo release tag=v2026.11.22`)
-4. Short free-form maintainer requests (e.g. title `Build android17` or `Build android16 and android17`)
+3. Build slash commands (`/build`, `/rebuild`, `/release`)
+4. Control slash commands (`/cancel`, `/stop`, `/abort`, `/status`, `/help`)
+5. Short free-form maintainer requests (e.g. title `Build android17` or `Build android16 and android17`)
 
 Only authorized repository roles (OWNER, MEMBER, COLLABORATOR) are allowed to
-trigger builds so public issue spam cannot consume runner minutes or publish
-releases.
+trigger or cancel builds so public issue spam cannot consume runner minutes or
+publish releases.
 """
 
 import argparse
@@ -40,7 +41,8 @@ import lock  # noqa: E402
 ALLOWED_ASSOCIATIONS = {"OWNER", "MEMBER", "COLLABORATOR"}
 SAFE_REF_RE = re.compile(r"^[A-Za-z0-9._/@+-]+$")
 BUILD_INTENT_RE = re.compile(r"\b(build|rebuild|package|compile|release|prebuilts?)\b", re.IGNORECASE)
-SLASH_CMD_RE = re.compile(r"(?m)^\s*/build(?:\s+(.*))?$")
+SLASH_CMD_RE = re.compile(r"(?im)^[ \t]*/(build|rebuild|release)(?:[ \t]+([^\r\n]*))?[ \t]*$")
+CONTROL_CMD_RE = re.compile(r"(?im)^[ \t]*/(cancel|stop|abort|status|help)(?:[ \t]+([^\r\n]*))?[ \t]*$")
 
 
 def _parse_issue_form_sections(body):
@@ -99,15 +101,17 @@ def _parse_slash_command(text):
     m = SLASH_CMD_RE.search(text or "")
     if not m:
         return None
-    arg_str = (m.group(1) or "").strip()
+    cmd = m.group(1).lower()
+    arg_str = (m.group(2) or "").strip()
     tokens = shlex.split(arg_str) if arg_str else []
     parsed = {
+        "command": cmd,
         "targets": [],
         "bt_ref": "",
         "digitalis_ref": "",
-        "publish_release": False,
+        "publish_release": True if cmd == "release" else None,
         "release_tag": "",
-        "pinned": False,
+        "pinned": None,
     }
     for tok in tokens:
         low = tok.lower()
@@ -117,8 +121,12 @@ def _parse_slash_command(text):
             parsed["targets"].append(low)
         elif low in ("release", "--release", "publish"):
             parsed["publish_release"] = True
+        elif low in ("no-release", "--no-release"):
+            parsed["publish_release"] = False
         elif low in ("pinned", "--pinned"):
             parsed["pinned"] = True
+        elif low in ("head", "latest", "--head"):
+            parsed["pinned"] = False
         elif "=" in tok:
             k, v = tok.split("=", 1)
             k = k.lower().replace("-", "_")
@@ -133,12 +141,53 @@ def _parse_slash_command(text):
                 parsed["release_tag"] = v
                 parsed["publish_release"] = True
             elif k in ("release", "publish", "publish_release"):
-                parsed["publish_release"] = v.lower() in ("1", "true", "yes", "on")
+                parsed["publish_release"] = _bool_val(v)
             elif k == "pinned":
-                parsed["pinned"] = v.lower() in ("1", "true", "yes", "on")
+                parsed["pinned"] = _bool_val(v)
         elif not parsed["bt_ref"]:
             parsed["bt_ref"] = tok
     return parsed
+
+
+def parse_control_command(*, author_association, comment_body=""):
+    """Parse a control slash command (`/cancel`, `/stop`, `/abort`, `/status`, `/help`)."""
+    m = CONTROL_CMD_RE.search(comment_body or "")
+    if not m:
+        return {"action": "none", "reason": "comment does not contain a control command"}
+    if author_association not in ALLOWED_ASSOCIATIONS:
+        return {
+            "action": "none",
+            "reason": f"author association {author_association!r} is not authorized",
+        }
+
+    raw_cmd = m.group(1).lower()
+    arg_str = (m.group(2) or "").strip()
+    tokens = shlex.split(arg_str) if arg_str else []
+
+    if raw_cmd in ("cancel", "stop", "abort"):
+        cancel_all = False
+        run_ids = []
+        for tok in tokens:
+            low = tok.lower()
+            if low in ("all", "--all"):
+                cancel_all = True
+            elif tok.isdigit():
+                run_ids.append(int(tok))
+            else:
+                url_match = re.search(r"/actions/runs/(\d+)", tok)
+                if url_match:
+                    run_ids.append(int(url_match.group(1)))
+        return {
+            "action": "cancel",
+            "cancel_all": cancel_all,
+            "run_ids": run_ids,
+            "reason": f"matched /{raw_cmd} command",
+        }
+
+    if raw_cmd == "status":
+        return {"action": "status", "reason": "matched /status command"}
+
+    return {"action": "help", "reason": "matched /help command"}
 
 
 def _normalize_targets(raw_targets, available):
@@ -161,7 +210,9 @@ def _normalize_targets(raw_targets, available):
 def _extract_mentions(text, available):
     found = []
     low = (text or "").lower()
-    if re.search(r"\b(all|both)\b", low) and re.search(r"\b(android|versions?|branches?|targets?)\b", low):
+    if re.search(r"\b(all|both)\b", low) and re.search(
+        r"\b(android|versions?|branches?|targets?)\b", low
+    ):
         return list(available)
     for ver in available:
         num = ver[len("android"):]
@@ -180,6 +231,62 @@ def _validate_ref(ref, label):
 
 def _bool_val(val):
     return str(val).strip().lower() in ("1", "true", "yes", "on", "y")
+
+
+def _extract_fields_from_sections_and_kv(sections, kv):
+    raw_targets = []
+    bt_ref = ""
+    digitalis_ref = ""
+    publish_release = None
+    release_tag = ""
+    pinned = None
+
+    for key in ("target android", "android version", "target"):
+        if sections.get(key):
+            raw_targets.extend(re.split(r"[,\s]+", sections[key]))
+    for key in ("translator branch or commit (optional)", "translator branch or commit", "branch"):
+        if sections.get(key) and not bt_ref:
+            bt_ref = sections[key].splitlines()[0].strip().strip("`\"'")
+    for key in ("digitalis repo branch or commit (optional)", "digitalis branch"):
+        if sections.get(key) and not digitalis_ref:
+            digitalis_ref = sections[key].splitlines()[0].strip().strip("`\"'")
+    for key in ("publish github release", "release"):
+        if sections.get(key):
+            if re.search(r"\[[xX]\]", sections[key]) or _bool_val(sections[key]):
+                publish_release = True
+    for key in ("release tag (optional)", "release tag"):
+        if sections.get(key) and not release_tag:
+            release_tag = sections[key].splitlines()[0].strip().strip("`\"'")
+            if release_tag:
+                publish_release = True
+
+    for key in ("android", "target", "version", "versions"):
+        if key in kv:
+            raw_targets.extend(re.split(r"[,\s]+", kv[key]))
+    for key in ("bt_ref", "bt_branch", "translator_ref", "translator_branch", "ref", "branch"):
+        if key in kv and not bt_ref:
+            bt_ref = kv[key]
+    for key in ("digitalis_ref", "digitalis_branch"):
+        if key in kv and not digitalis_ref:
+            digitalis_ref = kv[key]
+    for key in ("publish_release", "publish", "release"):
+        if key in kv:
+            publish_release = _bool_val(kv[key])
+    for key in ("release_tag", "tag"):
+        if key in kv and not release_tag:
+            release_tag = kv[key]
+            publish_release = True
+    if "pinned" in kv:
+        pinned = _bool_val(kv["pinned"])
+
+    return {
+        "targets": raw_targets,
+        "bt_ref": bt_ref,
+        "digitalis_ref": digitalis_ref,
+        "publish_release": publish_release,
+        "release_tag": release_tag,
+        "pinned": pinned,
+    }
 
 
 def parse_event(
@@ -206,7 +313,10 @@ def parse_event(
 
     slash = _parse_slash_command(active_text)
     if is_comment and slash is None:
-        return {"should_build": False, "reason": "comment does not contain a /build command"}
+        return {
+            "should_build": False,
+            "reason": "comment does not contain a /build, /rebuild, or /release command",
+        }
 
     sections = {} if is_comment else _parse_issue_form_sections(body)
     kv = _parse_kv_lines(active_text)
@@ -229,9 +339,9 @@ def parse_event(
     raw_targets = []
     bt_ref = ""
     digitalis_ref = ""
-    publish_release = False
+    publish_release = None
     release_tag = ""
-    pinned = False
+    pinned = None
 
     if slash is not None:
         raw_targets.extend(slash["targets"])
@@ -241,46 +351,42 @@ def parse_event(
         release_tag = slash["release_tag"]
         pinned = slash["pinned"]
 
-    # Issue Form fields
-    for key in ("target android", "android version", "target"):
-        if sections.get(key):
-            raw_targets.extend(re.split(r"[,\s]+", sections[key]))
-    for key in ("translator branch or commit (optional)", "translator branch or commit", "branch"):
-        if sections.get(key) and not bt_ref:
-            bt_ref = sections[key].splitlines()[0].strip().strip("`\"'")
-    for key in ("digitalis repo branch or commit (optional)", "digitalis branch"):
-        if sections.get(key) and not digitalis_ref:
-            digitalis_ref = sections[key].splitlines()[0].strip().strip("`\"'")
-    for key in ("publish github release", "release"):
-        if sections.get(key):
-            if re.search(r"\[[xX]\]", sections[key]) or _bool_val(sections[key]):
-                publish_release = True
-    for key in ("release tag (optional)", "release tag"):
-        if sections.get(key) and not release_tag:
-            release_tag = sections[key].splitlines()[0].strip().strip("`\"'")
-            if release_tag:
-                publish_release = True
-
-    # Key-value lines
-    for key in ("android", "target", "version", "versions"):
-        if key in kv:
-            raw_targets.extend(re.split(r"[,\s]+", kv[key]))
-    for key in ("bt_ref", "bt_branch", "translator_ref", "translator_branch", "ref", "branch"):
-        if key in kv and not bt_ref:
-            bt_ref = kv[key]
-    for key in ("digitalis_ref", "digitalis_branch"):
-        if key in kv and not digitalis_ref:
-            digitalis_ref = kv[key]
-    for key in ("publish_release", "publish", "release"):
-        if key in kv:
-            if _bool_val(kv[key]):
-                publish_release = True
-    for key in ("release_tag", "tag"):
-        if key in kv and not release_tag:
-            release_tag = kv[key]
+    parsed_fields = _extract_fields_from_sections_and_kv(sections, kv)
+    raw_targets.extend(parsed_fields["targets"])
+    if not bt_ref:
+        bt_ref = parsed_fields["bt_ref"]
+    if not digitalis_ref:
+        digitalis_ref = parsed_fields["digitalis_ref"]
+    if publish_release is None:
+        publish_release = parsed_fields["publish_release"]
+    if not release_tag and parsed_fields["release_tag"]:
+        release_tag = parsed_fields["release_tag"]
+        if publish_release is None:
             publish_release = True
-    if "pinned" in kv:
-        pinned = _bool_val(kv["pinned"])
+    if pinned is None:
+        pinned = parsed_fields["pinned"]
+
+    # When commenting bare `/build`, `/rebuild`, or `/release` (without overriding targets or
+    # branch in the comment), inherit settings from the parent issue's form/key-value fields.
+    if is_comment and not raw_targets and not bt_ref:
+        parent_fields = _extract_fields_from_sections_and_kv(
+            _parse_issue_form_sections(body),
+            _parse_kv_lines(body),
+        )
+        raw_targets.extend(parent_fields["targets"])
+        if not bt_ref:
+            bt_ref = parent_fields["bt_ref"]
+        if not digitalis_ref:
+            digitalis_ref = parent_fields["digitalis_ref"]
+        if publish_release is None:
+            publish_release = parent_fields["publish_release"]
+        if not release_tag and parent_fields["release_tag"] and publish_release is not False:
+            release_tag = parent_fields["release_tag"]
+        if pinned is None:
+            pinned = parent_fields["pinned"]
+
+    publish_release = bool(publish_release)
+    pinned = bool(pinned)
 
     # If `branch` was given as `android16` / `android17` / `all`, also treat it as target Android.
     if bt_ref and not raw_targets:
