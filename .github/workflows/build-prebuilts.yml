@@ -63,7 +63,7 @@ jobs:
       release_tag: ${{ steps.plan.outputs.release_tag }}
       issue_number: ${{ steps.plan.outputs.issue_number }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Validate lockfile and resolve trigger parameters
         id: plan
@@ -177,7 +177,7 @@ jobs:
       USE_BRANCH_HEAD: ${{ needs.plan.outputs.use_branch_head }}
       CCACHE_DIR: /tmp/digitalis-ccache
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Free runner disk and add swap
         run: scripts/free-runner-disk.sh "digitalis-${ANDROID_BRANCH}"
@@ -199,7 +199,7 @@ jobs:
           echo "$info"
 
       - name: Restore ccache
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v6
         with:
           path: /tmp/digitalis-ccache
           key: digitalis-ccache-${{ matrix.android }}-${{ hashFiles('config/versions.json') }}-${{ github.run_id }}
@@ -249,7 +249,7 @@ jobs:
 
       - name: Save ccache
         if: always() && steps.meta.outcome == 'success'
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v6
         with:
           path: /tmp/digitalis-ccache
           key: digitalis-ccache-${{ matrix.android }}-${{ hashFiles('config/versions.json') }}-${{ github.run_id }}
@@ -278,9 +278,12 @@ jobs:
             --sources "$DIGITALIS_WORK/aosp/.digitalis-sources.json" \
             --license "$DIGITALIS_WORK/aosp/digitalis/LICENSE" \
             --bt-ref "$BT_REF"
+          cp "$DIGITALIS_WORK/dist/digitalis-prebuilts/MANIFEST.txt" \
+             "$DIGITALIS_WORK/dist/digitalis-prebuilts/SOURCES.json" \
+             "$DIGITALIS_WORK/dist/"
           ls -lh "$DIGITALIS_WORK/dist"
-          cat "$DIGITALIS_WORK/dist/digitalis-prebuilts/MANIFEST.txt"
-          release_id="$(awk -F': *' '/^release-id:/{print $2}' "$DIGITALIS_WORK/dist/digitalis-prebuilts/MANIFEST.txt")"
+          cat "$DIGITALIS_WORK/dist/MANIFEST.txt"
+          release_id="$(awk -F': *' '/^release-id:/{print $2}' "$DIGITALIS_WORK/dist/MANIFEST.txt")"
           echo "release_id=$release_id" >> "$GITHUB_OUTPUT"
 
       - name: Verify packaged bundle
@@ -299,20 +302,20 @@ jobs:
         run: scripts/run-host-tests.sh "$DIGITALIS_WORK/aosp" "$DIGITALIS_WORK/reports"
 
       - name: Upload prebuilt bundle artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: digitalis-prebuilts-${{ steps.pkg.outputs.release_id }}
           path: |
             ${{ env.DIGITALIS_WORK }}/dist/digitalis-prebuilts-*.tar.gz
             ${{ env.DIGITALIS_WORK }}/dist/digitalis-prebuilts-*.tar.gz.sha256
-            ${{ env.DIGITALIS_WORK }}/dist/digitalis-prebuilts/MANIFEST.txt
-            ${{ env.DIGITALIS_WORK }}/dist/digitalis-prebuilts/SOURCES.json
+            ${{ env.DIGITALIS_WORK }}/dist/MANIFEST.txt
+            ${{ env.DIGITALIS_WORK }}/dist/SOURCES.json
           if-no-files-found: error
           retention-days: 90
 
       - name: Upload build logs and test reports
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: build-logs-${{ matrix.android }}
           path: |
@@ -340,10 +343,10 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       CUSTOM_TAG: ${{ needs.plan.outputs.release_tag }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Download prebuilt artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: digitalis-prebuilts-*
           path: release-artifacts
@@ -352,7 +355,10 @@ jobs:
         id: publish
         run: |
           shopt -s nullglob
-          dirs=(release-artifacts/digitalis-prebuilts-*)
+          dirs=()
+          for m in release-artifacts/MANIFEST.txt release-artifacts/*/MANIFEST.txt; do
+            dirs+=("$(dirname "$m")")
+          done
           if (( ${#dirs[@]} == 0 )); then
             echo "::error::no prebuilt artifacts found to release"
             exit 1
