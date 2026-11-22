@@ -1,4 +1,4 @@
-# digitalis-prebuilts
+# digitalis prebuilts
 
 Automated GitHub Actions CI that builds and publishes binary-only
 [Digitalis](https://github.com/DigitalisX64) ARM64-to-x86_64 translator prebuilt
