@@ -88,7 +88,9 @@ release: true
 > `/cancel` runs in a separate lightweight workflow
 > ([`issue-commands.yml`](.github/workflows/issue-commands.yml)) so it executes
 > immediately and is never queued behind a long-running build. Only comments
-> from `OWNER`, `MEMBER`, or `COLLABORATOR` accounts are accepted.
+> from `OWNER`, `MEMBER`, or `COLLABORATOR` accounts are accepted. The trigger
+> issue is closed automatically as completed when the build (and release, if
+> enabled) succeeds.
 
 ## Downloading prebuilts
 

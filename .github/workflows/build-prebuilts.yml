@@ -396,13 +396,18 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
       ISSUE_NUMBER: ${{ needs.plan.outputs.issue_number }}
+      IS_PULL_REQUEST: ${{ github.event.issue.pull_request != null }}
       BUILD_RESULT: ${{ needs.build.result }}
       RELEASE_RESULT: ${{ needs.release.result }}
       RELEASE_URLS: ${{ needs.release.outputs.release_urls }}
     steps:
-      - name: Post final status comment
+      - name: Post final status comment and close issue on success
         run: |
           run_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          succeeded="false"
+          if [[ "$BUILD_RESULT" == "success" && ( "$RELEASE_RESULT" == "success" || "$RELEASE_RESULT" == "skipped" ) ]]; then
+            succeeded="true"
+          fi
           {
             printf 'Prebuilt build finished: **build=%s**' "$BUILD_RESULT"
             if [[ "$RELEASE_RESULT" != "skipped" ]]; then
@@ -415,4 +420,10 @@ jobs:
                 printf -- '- Release: %s\n' "$u"
               done
             fi
+            if [[ "$succeeded" == "true" && "$IS_PULL_REQUEST" != "true" ]]; then
+              printf '\nClosing this issue automatically as completed.\n'
+            fi
           } | gh issue comment "$ISSUE_NUMBER" --body-file -
+          if [[ "$succeeded" == "true" && "$IS_PULL_REQUEST" != "true" ]]; then
+            gh issue close "$ISSUE_NUMBER" --reason completed
+          fi

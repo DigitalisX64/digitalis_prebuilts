@@ -7,6 +7,7 @@ body:
     attributes:
       value: |
         Opening this issue triggers **Build Digitalis Prebuilts** automatically when submitted by a repository owner, member, or collaborator.
+        The issue closes automatically once the build (and release, if enabled) succeeds.
         You can control builds via comments on this issue: `/build`, `/rebuild`, `/release`, `/cancel`, `/status`, or `/help`.
 
   - type: dropdown
