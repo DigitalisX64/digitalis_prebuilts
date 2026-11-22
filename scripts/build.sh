@@ -74,31 +74,6 @@ export DISABLE_ARTIFACT_PATH_REQUIREMENTS=true
 export BUILD_USERNAME="${BUILD_USERNAME:-digitalis-ci}"
 export BUILD_HOSTNAME="${BUILD_HOSTNAME:-github-actions}"
 
-if command -v ccache >/dev/null 2>&1; then
-  ccache_bin="$(command -v ccache)"
-  export CC_WRAPPER="$ccache_bin"
-  export ALLOW_NINJA_ENV=true
-  # Soong's build sandbox permits writes only under /tmp and out/.
-  export CCACHE_DIR="${CCACHE_DIR:-/tmp/digitalis-ccache}"
-  case "$CCACHE_DIR" in
-    /tmp/*|"$top"/out/*) ;;
-    *)
-      echo "CCACHE_DIR must be under /tmp or \$top/out (got $CCACHE_DIR)" >&2
-      exit 1
-      ;;
-  esac
-  mkdir -p "$CCACHE_DIR"
-  clang_key="$(jq -r '.clang | join(",")' "$top/.digitalis-sources.json")"
-  ccache \
-    -o max_size=3G \
-    -o compression=true \
-    -o hash_dir=false \
-    -o base_dir="$top" \
-    -o compiler_check="string:$clang_key" \
-    -o sloppiness=include_file_mtime,include_file_ctime,time_macros,file_stat_matches
-  ccache --zero-stats >/dev/null
-fi
-
 set +u
 # shellcheck disable=SC1091
 source build/envsetup.sh
@@ -118,10 +93,6 @@ if (( status == 0 )); then
 fi
 if (( status == 0 )); then
   m -k -j"$(nproc)" "${build_targets[@]}" "${host_test_targets[@]}" || status=$?
-fi
-
-if command -v ccache >/dev/null 2>&1; then
-  ccache --show-stats || true
 fi
 
 if (( status != 0 )); then

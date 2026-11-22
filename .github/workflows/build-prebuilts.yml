@@ -164,7 +164,6 @@ jobs:
     timeout-minutes: 355
     permissions:
       contents: read
-      actions: write
     strategy:
       fail-fast: false
       matrix:
@@ -175,7 +174,6 @@ jobs:
       BT_REF: ${{ needs.plan.outputs.bt_ref }}
       DIGITALIS_REF: ${{ needs.plan.outputs.digitalis_ref }}
       USE_BRANCH_HEAD: ${{ needs.plan.outputs.use_branch_head }}
-      CCACHE_DIR: /tmp/digitalis-ccache
     steps:
       - uses: actions/checkout@v7
 
@@ -186,26 +184,7 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq --no-install-recommends \
-            binutils ccache e2fsprogs erofs-utils jq
-          ccache --version | head -n 1
-
-      - name: Read version metadata
-        id: meta
-        run: |
-          info="$(python3 scripts/lock.py info "$ANDROID_BRANCH")"
-          echo "bt_short=$(jq -r .bt_short <<<"$info")" >> "$GITHUB_OUTPUT"
-          echo "digitalis_short=$(jq -r .digitalis_short <<<"$info")" >> "$GITHUB_OUTPUT"
-          echo "api=$(jq -r .api <<<"$info")" >> "$GITHUB_OUTPUT"
-          echo "$info"
-
-      - name: Restore ccache
-        uses: actions/cache/restore@v6
-        with:
-          path: /tmp/digitalis-ccache
-          key: digitalis-ccache-${{ matrix.android }}-${{ hashFiles('config/versions.json') }}-${{ github.run_id }}
-          restore-keys: |
-            digitalis-ccache-${{ matrix.android }}-${{ hashFiles('config/versions.json') }}-
-            digitalis-ccache-${{ matrix.android }}-
+            binutils e2fsprogs erofs-utils jq
 
       - name: Fetch pinned AOSP framework and unproxied guest libraries
         run: |
@@ -246,23 +225,6 @@ jobs:
           echo "built in $(( (SECONDS - start) / 60 ))m $(( (SECONDS - start) % 60 ))s"
           du -sh "$DIGITALIS_WORK/aosp/out"
           df -h / /mnt 2>/dev/null || df -h /
-
-      - name: Save ccache
-        if: always() && steps.meta.outcome == 'success'
-        uses: actions/cache/save@v6
-        with:
-          path: /tmp/digitalis-ccache
-          key: digitalis-ccache-${{ matrix.android }}-${{ hashFiles('config/versions.json') }}-${{ github.run_id }}
-
-      - name: Prune superseded caches
-        if: always() && steps.meta.outcome == 'success'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          scripts/prune-caches.sh \
-            "$GITHUB_REF" \
-            "digitalis-ccache-${ANDROID_BRANCH}-" \
-            "digitalis-ccache-${ANDROID_BRANCH}-${{ hashFiles('config/versions.json') }}-${GITHUB_RUN_ID}"
 
       - name: Package canonical Digitalis prebuilt bundle
         id: pkg
@@ -311,10 +273,10 @@ jobs:
             ${{ env.DIGITALIS_WORK }}/dist/MANIFEST.txt
             ${{ env.DIGITALIS_WORK }}/dist/SOURCES.json
           if-no-files-found: error
-          retention-days: 90
+          retention-days: ${{ needs.plan.outputs.should_release == 'true' && 1 || 7 }}
 
-      - name: Upload build logs and test reports
-        if: always()
+      - name: Upload build logs and test reports on failure
+        if: failure()
         uses: actions/upload-artifact@v7
         with:
           name: build-logs-${{ matrix.android }}
@@ -327,7 +289,7 @@ jobs:
             ${{ env.DIGITALIS_WORK }}/reports/
           if-no-files-found: ignore
           include-hidden-files: true
-          retention-days: 30
+          retention-days: 3
 
   release:
     name: Publish GitHub Releases (one per branch)
