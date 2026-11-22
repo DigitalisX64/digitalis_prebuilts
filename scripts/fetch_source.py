@@ -36,6 +36,27 @@ def run_git(*args, cwd):
     subprocess.run(["git", "-c", "advice.detachedHead=false", *args], cwd=cwd, check=True)
 
 
+def resolve_remote_ref(url, ref):
+    """Resolve a branch, tag, or 40-char commit SHA against a remote repository."""
+    if lock.COMMIT_RE.match(ref):
+        return ref
+    for candidate in (f"refs/heads/{ref}", f"refs/tags/{ref}", ref):
+        proc = subprocess.run(
+            ["git", "ls-remote", url, candidate],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        lines = [line for line in proc.stdout.splitlines() if line.strip()]
+        if lines:
+            # Prefer peeled tag commit (^{}) if present.
+            for line in lines:
+                if line.endswith("^{}"):
+                    return line.split()[0]
+            return lines[0].split()[0]
+    raise SystemExit(f"ref {ref!r} not found in {url}")
+
+
 def fetch_project(tree_top, project, clang_versions, rust_versions):
     dest = tree_top / project["path"]
     if dest.exists():
@@ -102,19 +123,65 @@ def materialize_links(tree_top, project):
             shutil.copy2(src, dst)
 
 
+def apply_ref_overrides(projects, android, bt_ref="", digitalis_ref="", use_branch_head=False):
+    """Return a copy of `projects` with optional live branch/SHA overrides applied."""
+    updated = [dict(p) for p in projects]
+    effective_bt_ref = bt_ref or (android if use_branch_head else "")
+    effective_dig_ref = digitalis_ref or (android if use_branch_head else "")
+    for proj in updated:
+        if proj["path"] == lock.TRANSLATOR_PATH and effective_bt_ref:
+            sha = resolve_remote_ref(proj["url"], effective_bt_ref)
+            print(
+                f"override {proj['path']}: {effective_bt_ref} -> {sha[:12]}",
+                flush=True,
+            )
+            proj["commit"] = sha
+            proj["resolved_ref"] = effective_bt_ref
+        elif proj["path"] == lock.DIGITALIS_PATH and effective_dig_ref:
+            sha = resolve_remote_ref(proj["url"], effective_dig_ref)
+            print(
+                f"override {proj['path']}: {effective_dig_ref} -> {sha[:12]}",
+                flush=True,
+            )
+            proj["commit"] = sha
+            proj["resolved_ref"] = effective_dig_ref
+    return updated
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--android", required=True, help="android16 or android17")
     ap.add_argument("--top", type=Path, required=True, help="destination AOSP tree directory")
     ap.add_argument("--lock", type=Path, default=lock.DEFAULT_LOCK)
     ap.add_argument("--jobs", type=int, default=8)
+    ap.add_argument(
+        "--bt-ref",
+        default="",
+        help="optional branch, tag, or commit SHA override for frameworks/libs/binary_translation",
+    )
+    ap.add_argument(
+        "--digitalis-ref",
+        default="",
+        help="optional branch, tag, or commit SHA override for digitalis",
+    )
+    ap.add_argument(
+        "--use-branch-head",
+        action="store_true",
+        help="resolve DigitalisX64 repos from the live HEAD of the target android branch",
+    )
     args = ap.parse_args(argv)
 
     version = lock.get_version(lock.load_lock(args.lock), args.android)
     tree_top = args.top.resolve()
     tree_top.mkdir(parents=True, exist_ok=True)
 
-    projects = version["projects"]
+    projects = apply_ref_overrides(
+        version["projects"],
+        android=args.android,
+        bt_ref=args.bt_ref,
+        digitalis_ref=args.digitalis_ref,
+        use_branch_head=args.use_branch_head,
+    )
     bootstrap = [p for p in projects if p["path"] in BOOTSTRAP_PATHS]
     for proj in bootstrap:
         fetch_project(tree_top, proj, (), ())
@@ -152,7 +219,12 @@ def main(argv=None):
         "clang": clang_versions,
         "rust": rust_versions,
         "projects": {
-            p["path"]: {"url": p["url"], "commit": p["commit"]} for p in projects
+            p["path"]: {
+                "url": p["url"],
+                "commit": p["commit"],
+                **({"ref": p["resolved_ref"]} if "resolved_ref" in p else {}),
+            }
+            for p in projects
         },
     }
     (tree_top / ".digitalis-sources.json").write_text(

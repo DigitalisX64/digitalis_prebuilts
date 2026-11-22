@@ -4,6 +4,10 @@ on:
   push:
     tags:
       - "v*"
+  issues:
+    types: [opened, edited]
+  issue_comment:
+    types: [created]
   workflow_dispatch:
     inputs:
       android:
@@ -14,6 +18,15 @@ on:
           - all
           - android17
           - android16
+      bt_ref:
+        description: "Optional branch, tag, or SHA in platform_frameworks_libs_binary_translation (empty = pinned in config/versions.json)"
+        type: string
+        required: false
+        default: ""
+      use_branch_head:
+        description: "Build latest HEAD of the target Android branch on GitHub instead of the lockfile SHA"
+        type: boolean
+        default: false
       publish_release:
         description: "Publish a GitHub Release with the packaged tarballs"
         type: boolean
@@ -25,7 +38,7 @@ on:
         default: ""
 
 concurrency:
-  group: build-prebuilts-${{ github.ref }}
+  group: build-prebuilts-${{ github.event.issue.number || github.ref }}
   cancel-in-progress: false
 
 permissions:
@@ -36,49 +49,116 @@ jobs:
     name: Plan build matrix
     runs-on: ubuntu-24.04
     timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
     outputs:
+      should_build: ${{ steps.plan.outputs.should_build }}
       android_matrix: ${{ steps.plan.outputs.android_matrix }}
       build_date: ${{ steps.plan.outputs.build_date }}
+      bt_ref: ${{ steps.plan.outputs.bt_ref }}
+      digitalis_ref: ${{ steps.plan.outputs.digitalis_ref }}
+      use_branch_head: ${{ steps.plan.outputs.use_branch_head }}
       should_release: ${{ steps.plan.outputs.should_release }}
       release_tag: ${{ steps.plan.outputs.release_tag }}
+      issue_number: ${{ steps.plan.outputs.issue_number }}
     steps:
       - uses: actions/checkout@v4
 
-      - name: Validate lockfile and resolve matrix
+      - name: Validate lockfile and resolve trigger parameters
         id: plan
         env:
+          EVENT_NAME: ${{ github.event_name }}
           INPUT_ANDROID: ${{ inputs.android }}
+          INPUT_BT_REF: ${{ inputs.bt_ref }}
+          INPUT_USE_HEAD: ${{ inputs.use_branch_head }}
           INPUT_PUBLISH: ${{ inputs.publish_release }}
           INPUT_TAG: ${{ inputs.release_tag }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           python3 scripts/lock.py check
           all_versions="$(python3 scripts/lock.py versions)"
-          if [[ -n "$INPUT_ANDROID" && "$INPUT_ANDROID" != "all" ]]; then
-            echo "$all_versions" | jq -e --arg v "$INPUT_ANDROID" 'index($v) != null' >/dev/null \
-              || { echo "::error::version $INPUT_ANDROID not in config/versions.json"; exit 1; }
-            matrix="$(jq -cn --arg v "$INPUT_ANDROID" '[$v]')"
-          else
-            matrix="$all_versions"
-          fi
           build_date="$(date -u +%Y-%m-%d)"
+
+          should_build="true"
+          matrix="[]"
+          bt_ref=""
+          digitalis_ref=""
+          use_branch_head="false"
           should_release="false"
           release_tag=""
-          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
-            should_release="true"
-            release_tag="${GITHUB_REF_NAME}"
-          elif [[ "$INPUT_PUBLISH" == "true" ]]; then
-            should_release="true"
-            release_tag="${INPUT_TAG:-prebuilts-${build_date}}"
+          issue_number=""
+
+          if [[ "$EVENT_NAME" == "issues" || "$EVENT_NAME" == "issue_comment" ]]; then
+            parsed="$(python3 scripts/parse_issue_trigger.py \
+              --event-name "$EVENT_NAME" \
+              --event-path "$GITHUB_EVENT_PATH")"
+            echo "parsed issue trigger: $parsed"
+            should_build="$(jq -r .should_build <<<"$parsed")"
+            issue_number="$(jq -r '.issue_number // ""' <<<"$parsed")"
+            if [[ "$should_build" == "true" ]]; then
+              matrix="$(jq -c .versions <<<"$parsed")"
+              bt_ref="$(jq -r .bt_ref <<<"$parsed")"
+              digitalis_ref="$(jq -r .digitalis_ref <<<"$parsed")"
+              use_branch_head="$(jq -r .use_branch_head <<<"$parsed")"
+              should_release="$(jq -r .publish_release <<<"$parsed")"
+              release_tag="$(jq -r .release_tag <<<"$parsed")"
+              if [[ "$should_release" == "true" && -z "$release_tag" ]]; then
+                release_tag="prebuilts-${build_date}"
+              fi
+              run_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+              ref_note="${bt_ref:-branch HEAD (latest)}"
+              if [[ "$use_branch_head" != "true" && -z "$bt_ref" ]]; then
+                ref_note="pinned in config/versions.json"
+              fi
+              targets_csv="$(jq -r 'join(", ")' <<<"$matrix")"
+              rel_suffix=""
+              if [[ -n "$release_tag" ]]; then
+                rel_suffix=" (\`${release_tag}\`)"
+              fi
+              gh issue comment "$issue_number" --body-file - <<EOF
+          Triggered prebuilt build from this issue:
+          - **Targets:** \`${targets_csv}\`
+          - **Translator ref:** \`${ref_note}\`
+          - **Publish release:** \`${should_release}\`${rel_suffix}
+          - **Workflow run:** ${run_url}
+          EOF
+            else
+              echo "skipping build: $(jq -r .reason <<<"$parsed")"
+            fi
+          else
+            if [[ -n "$INPUT_ANDROID" && "$INPUT_ANDROID" != "all" ]]; then
+              echo "$all_versions" | jq -e --arg v "$INPUT_ANDROID" 'index($v) != null' >/dev/null \
+                || { echo "::error::version $INPUT_ANDROID not in config/versions.json"; exit 1; }
+              matrix="$(jq -cn --arg v "$INPUT_ANDROID" '[$v]')"
+            else
+              matrix="$all_versions"
+            fi
+            bt_ref="${INPUT_BT_REF:-}"
+            use_branch_head="${INPUT_USE_HEAD:-false}"
+            if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+              should_release="true"
+              release_tag="${GITHUB_REF_NAME}"
+            elif [[ "$INPUT_PUBLISH" == "true" ]]; then
+              should_release="true"
+              release_tag="${INPUT_TAG:-prebuilts-${build_date}}"
+            fi
           fi
+
+          echo "should_build=$should_build" >> "$GITHUB_OUTPUT"
           echo "android_matrix=$matrix" >> "$GITHUB_OUTPUT"
           echo "build_date=$build_date" >> "$GITHUB_OUTPUT"
+          echo "bt_ref=$bt_ref" >> "$GITHUB_OUTPUT"
+          echo "digitalis_ref=$digitalis_ref" >> "$GITHUB_OUTPUT"
+          echo "use_branch_head=$use_branch_head" >> "$GITHUB_OUTPUT"
           echo "should_release=$should_release" >> "$GITHUB_OUTPUT"
           echo "release_tag=$release_tag" >> "$GITHUB_OUTPUT"
-          echo "matrix=$matrix build_date=$build_date should_release=$should_release release_tag=$release_tag"
+          echo "issue_number=$issue_number" >> "$GITHUB_OUTPUT"
 
   build:
     name: Build (${{ matrix.android }})
     needs: plan
+    if: needs.plan.outputs.should_build == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 355
     permissions:
@@ -91,6 +171,9 @@ jobs:
     env:
       ANDROID_BRANCH: ${{ matrix.android }}
       BUILD_DATE: ${{ needs.plan.outputs.build_date }}
+      BT_REF: ${{ needs.plan.outputs.bt_ref }}
+      DIGITALIS_REF: ${{ needs.plan.outputs.digitalis_ref }}
+      USE_BRANCH_HEAD: ${{ needs.plan.outputs.use_branch_head }}
       CCACHE_DIR: /tmp/digitalis-ccache
     steps:
       - uses: actions/checkout@v4
@@ -135,10 +218,21 @@ jobs:
       - name: Fetch reduced AOSP and Digitalis source tree
         run: |
           start=$SECONDS
+          extra_args=()
+          if [[ -n "$BT_REF" ]]; then
+            extra_args+=(--bt-ref "$BT_REF")
+          fi
+          if [[ -n "$DIGITALIS_REF" ]]; then
+            extra_args+=(--digitalis-ref "$DIGITALIS_REF")
+          fi
+          if [[ "$USE_BRANCH_HEAD" == "true" ]]; then
+            extra_args+=(--use-branch-head)
+          fi
           python3 scripts/fetch_source.py \
             --android "$ANDROID_BRANCH" \
             --top "$DIGITALIS_WORK/aosp" \
-            --jobs 8
+            --jobs 8 \
+            "${extra_args[@]}"
           echo "fetched in $(( (SECONDS - start) / 60 ))m $(( (SECONDS - start) % 60 ))s"
           du -sh "$DIGITALIS_WORK/aosp"
           df -h / /mnt 2>/dev/null || df -h /
@@ -186,8 +280,8 @@ jobs:
 
       - name: Verify packaged bundle
         run: |
-          tarball="$(ls "$DIGITALIS_WORK"/dist/digitalis-prebuilts-*.tar.gz)"
-          python3 scripts/verify_bundle.py "$tarball" \
+          tarballs=("$DIGITALIS_WORK"/dist/digitalis-prebuilts-*.tar.gz)
+          python3 scripts/verify_bundle.py "${tarballs[0]}" \
             --config-mk "$DIGITALIS_WORK/aosp/frameworks/libs/binary_translation/berberis_config.mk" \
             --top "$DIGITALIS_WORK/aosp"
           if [[ -x "$DIGITALIS_WORK/aosp/digitalis/scripts/verify-digitalis-prebuilts.sh" ]]; then
@@ -230,7 +324,7 @@ jobs:
   release:
     name: Publish GitHub Release
     needs: [plan, build]
-    if: needs.plan.outputs.should_release == 'true'
+    if: needs.plan.outputs.should_build == 'true' && needs.plan.outputs.should_release == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
@@ -268,7 +362,8 @@ jobs:
             bt_sha="$(awk -F': *' '/^binary_translation-sha:/{print $2}' "$dir/MANIFEST.txt")"
             dig_sha="$(awk -F': *' '/^digitalis-sha:/{print $2}' "$dir/MANIFEST.txt")"
             count="$(awk -F': *' '/^artifact-count:/{print $2}' "$dir/MANIFEST.txt")"
-            tar_name="$(basename "$(ls "$dir"/*.tar.gz)")"
+            tar_files=("$dir"/*.tar.gz)
+            tar_name="$(basename "${tar_files[0]}")"
             {
               echo "## ${android}"
               echo ""
@@ -297,3 +392,31 @@ jobs:
               --title "Digitalis Prebuilts ${RELEASE_TAG}" \
               --notes-file release-notes.md
           fi
+
+  notify-issue:
+    name: Report status to triggering issue
+    needs: [plan, build, release]
+    if: always() && needs.plan.outputs.should_build == 'true' && needs.plan.outputs.issue_number != ''
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      issues: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      ISSUE_NUMBER: ${{ needs.plan.outputs.issue_number }}
+      BUILD_RESULT: ${{ needs.build.result }}
+      RELEASE_RESULT: ${{ needs.release.result }}
+      RELEASE_TAG: ${{ needs.plan.outputs.release_tag }}
+    steps:
+      - name: Post final status comment
+        run: |
+          run_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          body="Prebuilt build finished: **build=${BUILD_RESULT}**"
+          if [[ "$RELEASE_RESULT" != "skipped" ]]; then
+            body="${body}, **release=${RELEASE_RESULT}**"
+          fi
+          body="${body}\n\n- Workflow run & artifacts: ${run_url}"
+          if [[ "$RELEASE_RESULT" == "success" && -n "$RELEASE_TAG" ]]; then
+            body="${body}\n- Release: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/releases/tag/${RELEASE_TAG}"
+          fi
+          printf '%b\n' "$body" | gh issue comment "$ISSUE_NUMBER" --body-file -

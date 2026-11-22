@@ -74,8 +74,15 @@ unbundled Soong-only build (`SOONG_ONLY=true`, `TARGET_BUILD_UNBUNDLED=true`,
 
 ## Triggering a build or release
 
+- **From an Issue (maintainers only):** open an issue using the **Build Digitalis Prebuilts**
+  form (or write key-value lines such as `branch: android17`, `android: android17` +
+  `branch: <custom-branch>`, or `release: true`), or comment `/build android17`,
+  `/build android16`, `/build all`, or `/build android17 branch=<branch> release tag=v2026.11.22`
+  on any issue. CI validates the author role (`OWNER`, `MEMBER`, or `COLLABORATOR`),
+  resolves the latest HEAD of the requested branch on GitHub, posts the workflow link
+  on the issue, and reports completion status when done.
 - **Manual run (workflow artifact only):** run **Actions → Build Digitalis Prebuilts → Run workflow**
-  (choose `all`, `android17`, or `android16`).
+  (choose `all`, `android17`, or `android16`, plus optional `bt_ref` / `use_branch_head`).
 - **Manual run + GitHub Release:** set `publish_release: true` (and optional `release_tag`).
 - **Tagged release:** push a `v*` tag (for example `git tag v2026.11.22 && git push origin v2026.11.22`)
   to build both `android16` and `android17` and publish the GitHub Release automatically.

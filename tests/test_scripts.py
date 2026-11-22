@@ -33,6 +33,7 @@ import check_ninja_inputs  # noqa: E402
 import fetch_aosp_libs  # noqa: E402
 import lock  # noqa: E402
 import package_bundle  # noqa: E402
+import parse_issue_trigger  # noqa: E402
 import verify_bundle  # noqa: E402
 
 
@@ -188,6 +189,114 @@ class NinjaInputCheckTests(unittest.TestCase):
             '"0x3" -> "0x2"',
         ]
         self.assertEqual(check_ninja_inputs.find_leaf_inputs(dot), ["src/a.cc"])
+
+
+class IssueTriggerParsingTests(unittest.TestCase):
+    def test_rejects_unauthorized_author(self):
+        res = parse_issue_trigger.parse_event(
+            event_name="issues",
+            author_association="NONE",
+            title="[Build] android17",
+            body="branch: android17",
+        )
+        self.assertFalse(res["should_build"])
+        self.assertIn("not authorized", res["reason"])
+
+    def test_parses_issue_form(self):
+        body = """### Target Android
+
+android17
+
+### Translator branch or commit (optional)
+
+fix/my-branch
+
+### Publish GitHub Release
+
+- [x] Publish a GitHub Release with the built tarballs
+
+### Release tag (optional)
+
+v2026.11.22
+"""
+        res = parse_issue_trigger.parse_event(
+            event_name="issues",
+            author_association="OWNER",
+            title="[Build] test fix",
+            body=body,
+        )
+        self.assertTrue(res["should_build"])
+        self.assertEqual(res["versions"], ["android17"])
+        self.assertEqual(res["bt_ref"], "fix/my-branch")
+        self.assertTrue(res["publish_release"])
+        self.assertEqual(res["release_tag"], "v2026.11.22")
+        self.assertTrue(res["use_branch_head"])
+
+    def test_parses_key_value_branch_as_target(self):
+        res = parse_issue_trigger.parse_event(
+            event_name="issues",
+            author_association="OWNER",
+            title="Build prebuilts",
+            body="branch: android16\nrelease: true\n",
+        )
+        self.assertTrue(res["should_build"])
+        self.assertEqual(res["versions"], ["android16"])
+        self.assertEqual(res["bt_ref"], "android16")
+        self.assertTrue(res["publish_release"])
+
+    def test_parses_comment_slash_command(self):
+        res = parse_issue_trigger.parse_event(
+            event_name="issue_comment",
+            author_association="COLLABORATOR",
+            title="Some tracking issue",
+            body="notes",
+            comment_body="/build android17 branch=port17 release tag=v2026.11.23",
+        )
+        self.assertTrue(res["should_build"])
+        self.assertEqual(res["versions"], ["android17"])
+        self.assertEqual(res["bt_ref"], "port17")
+        self.assertTrue(res["publish_release"])
+        self.assertEqual(res["release_tag"], "v2026.11.23")
+
+    def test_comment_without_slash_command_is_ignored(self):
+        res = parse_issue_trigger.parse_event(
+            event_name="issue_comment",
+            author_association="OWNER",
+            title="Build android17",
+            body="branch: android17",
+            comment_body="Thanks, checking the logs now.",
+        )
+        self.assertFalse(res["should_build"])
+
+    def test_non_build_issue_is_ignored(self):
+        res = parse_issue_trigger.parse_event(
+            event_name="issues",
+            author_association="OWNER",
+            title="Question about documentation",
+            body="How do I check SHA256SUMS?",
+        )
+        self.assertFalse(res["should_build"])
+
+    def test_freeform_build_both_versions(self):
+        res = parse_issue_trigger.parse_event(
+            event_name="issues",
+            author_association="OWNER",
+            title="Build prebuilts for android16 and android17",
+            body="",
+        )
+        self.assertTrue(res["should_build"])
+        self.assertEqual(res["versions"], ["android17", "android16"])
+        self.assertEqual(res["bt_ref"], "")
+        self.assertTrue(res["use_branch_head"])
+
+    def test_rejects_single_custom_ref_with_multiple_versions(self):
+        res = parse_issue_trigger.parse_event(
+            event_name="issue_comment",
+            author_association="OWNER",
+            comment_body="/build all branch=fix/only-17",
+        )
+        self.assertFalse(res["should_build"])
+        self.assertIn("multiple Android versions", res["reason"])
 
 
 if __name__ == "__main__":

@@ -1,0 +1,44 @@
+name: Build Digitalis Prebuilts
+description: Trigger a GitHub Actions prebuilt build for an Android release branch or custom translator branch (maintainers only)
+title: "[Build] "
+labels: ["build"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Opening this issue triggers **Build Digitalis Prebuilts** automatically when submitted by a repository owner, member, or collaborator.
+        You can also re-trigger from any issue comment with `/build android17`, `/build android16`, `/build all`, or `/build android17 branch=<branch> release`.
+
+  - type: dropdown
+    id: target_android
+    attributes:
+      label: Target Android
+      description: Which AOSP release branch(es) to build prebuilts for.
+      options:
+        - android17
+        - android16
+        - all
+      default: 0
+    validations:
+      required: true
+
+  - type: input
+    id: bt_ref
+    attributes:
+      label: Translator branch or commit (optional)
+      description: Branch, tag, or commit SHA in DigitalisX64/platform_frameworks_libs_binary_translation. Leave blank to build the latest HEAD of the target Android branch.
+      placeholder: android17
+
+  - type: checkboxes
+    id: publish_release
+    attributes:
+      label: Publish GitHub Release
+      options:
+        - label: Publish a GitHub Release with the built tarballs
+
+  - type: input
+    id: release_tag
+    attributes:
+      label: Release tag (optional)
+      description: Tag name when publishing a release (defaults to prebuilts-YYYY-MM-DD).
+      placeholder: v2026.11.22
