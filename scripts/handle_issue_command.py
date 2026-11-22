@@ -40,10 +40,10 @@ HELP_TEXT = """Available prebuilt CI comment commands (maintainers only):
 | --- | --- |
 | `/build android17` | Build latest `android17` branch HEAD (workflow artifact only) |
 | `/build android16` | Build latest `android16` branch HEAD |
-| `/build all` | Build both `android17` and `android16` |
+| `/build all` | Build both `android17` and `android16` from their respective branch HEADs |
 | `/build android17 release` (or `/release android17`) | Build and publish a GitHub Release (`<branch>-<YYYY-MM-DD>-<sha>`) |
 | `/build all release` (or `/release all`) | Build both branches and publish one GitHub Release per branch |
-| `/build android17 branch=<ref> release` | Build a custom branch, tag, or SHA in `platform_frameworks_libs_binary_translation` |
+| `/build android17 branch=<ref> release` | Build a custom branch, tag, or SHA in `platform_frameworks_libs_binary_translation` (single AOSP target only) |
 | `/build android17 release tag=<tag>` | Publish a single-branch release with a custom tag |
 | `/build android17 pinned` | Build the commit pinned in `config/versions.json` instead of branch HEAD |
 | `/rebuild` (or bare `/build`) | Re-run the build using this issue's target/branch/release settings |

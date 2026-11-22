@@ -1,5 +1,5 @@
 name: Build Digitalis Prebuilts
-description: Trigger a GitHub Actions prebuilt build for an Android release branch or custom translator branch (maintainers only)
+description: Trigger a GitHub Actions prebuilt build for an AOSP release branch or custom translator branch (maintainers only)
 title: "[Build] "
 labels: ["build"]
 body:
@@ -10,9 +10,9 @@ body:
         You can control builds via comments on this issue: `/build`, `/rebuild`, `/release`, `/cancel`, `/status`, or `/help`.
 
   - type: dropdown
-    id: target_android
+    id: target_aosp
     attributes:
-      label: Target Android
+      label: Target AOSP
       description: Which AOSP release branch(es) to build prebuilts for.
       options:
         - android17
@@ -26,7 +26,12 @@ body:
     id: bt_ref
     attributes:
       label: Translator branch or commit (optional)
-      description: Branch, tag, or commit SHA in DigitalisX64/platform_frameworks_libs_binary_translation. Leave blank to build the latest HEAD of the target Android branch.
+      description: >-
+        Branch, tag, or commit SHA in DigitalisX64/platform_frameworks_libs_binary_translation.
+        Leave blank to build the latest HEAD of each target AOSP branch.
+        When Target AOSP is "all", this field MUST be left blank (each AOSP target then builds
+        from its own branch HEAD, i.e. android17 and android16); passing a custom ref with "all"
+        is rejected because one translator ref cannot build both AOSP 16 and AOSP 17.
       placeholder: android17
 
   - type: checkboxes

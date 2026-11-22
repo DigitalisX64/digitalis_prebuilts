@@ -18,7 +18,7 @@
 
 Supports:
 1. GitHub Issue Forms (.github/ISSUE_TEMPLATE/build-prebuilts.yml)
-2. Key-value lines (e.g. `android: android17`, `branch: fix/foo`, `release: true`, `tag: v1.0`)
+2. Key-value lines (e.g. `aosp: android17`, `branch: fix/foo`, `release: true`, `tag: v1.0`)
 3. Build slash commands (`/build`, `/rebuild`, `/release`)
 4. Control slash commands (`/cancel`, `/stop`, `/abort`, `/status`, `/help`)
 5. Short free-form maintainer requests (e.g. title `Build android17` or `Build android16 and android17`)
@@ -74,6 +74,7 @@ def _parse_kv_lines(text):
         key = m.group(1).lower().replace("-", "_")
         val = m.group(2).strip().strip("`\"'")
         if key in {
+            "aosp",
             "android",
             "target",
             "version",
@@ -117,7 +118,7 @@ def _parse_slash_command(text):
         low = tok.lower()
         if low in ("all", "both"):
             parsed["targets"].append("all")
-        elif re.fullmatch(r"android[0-9]+", low):
+        elif re.fullmatch(r"(?:android|aosp)[0-9]+", low):
             parsed["targets"].append(low)
         elif low in ("release", "--release", "publish"):
             parsed["publish_release"] = True
@@ -131,7 +132,7 @@ def _parse_slash_command(text):
             k, v = tok.split("=", 1)
             k = k.lower().replace("-", "_")
             v = v.strip().strip("`\"'")
-            if k in ("android", "target", "version"):
+            if k in ("aosp", "android", "target", "version"):
                 parsed["targets"].extend(re.split(r"[,\s]+", v.lower()))
             elif k in ("branch", "ref", "bt_ref", "bt_branch", "translator"):
                 parsed["bt_ref"] = v
@@ -200,6 +201,10 @@ def _normalize_targets(raw_targets, available):
             return list(available)
         if tok in available and tok not in out:
             out.append(tok)
+        elif tok.startswith("aosp") and tok[4:].isdigit() and f"android{tok[4:]}" in available:
+            name = f"android{tok[4:]}"
+            if name not in out:
+                out.append(name)
         elif tok.isdigit() and f"android{tok}" in available:
             name = f"android{tok}"
             if name not in out:
@@ -211,7 +216,7 @@ def _extract_mentions(text, available):
     found = []
     low = (text or "").lower()
     if re.search(r"\b(all|both)\b", low) and re.search(
-        r"\b(android|versions?|branches?|targets?)\b", low
+        r"\b(aosp|android|versions?|branches?|targets?)\b", low
     ):
         return list(available)
     for ver in available:
@@ -241,7 +246,7 @@ def _extract_fields_from_sections_and_kv(sections, kv):
     release_tag = ""
     pinned = None
 
-    for key in ("target android", "android version", "target"):
+    for key in ("target aosp", "aosp version", "target android", "android version", "target"):
         if sections.get(key):
             raw_targets.extend(re.split(r"[,\s]+", sections[key]))
     for key in ("translator branch or commit (optional)", "translator branch or commit", "branch"):
@@ -260,7 +265,7 @@ def _extract_fields_from_sections_and_kv(sections, kv):
             if release_tag:
                 publish_release = True
 
-    for key in ("android", "target", "version", "versions"):
+    for key in ("aosp", "android", "target", "version", "versions"):
         if key in kv:
             raw_targets.extend(re.split(r"[,\s]+", kv[key]))
     for key in ("bt_ref", "bt_branch", "translator_ref", "translator_branch", "ref", "branch"):
@@ -323,7 +328,13 @@ def parse_event(
 
     has_form = any(
         k in sections
-        for k in ("target android", "android version", "translator branch or commit (optional)")
+        for k in (
+            "target aosp",
+            "aosp version",
+            "target android",
+            "android version",
+            "translator branch or commit (optional)",
+        )
     )
     has_build_label = any(lbl.lower() in ("build", "build-prebuilts") for lbl in labels)
     has_build_intent = (
@@ -388,7 +399,7 @@ def parse_event(
     publish_release = bool(publish_release)
     pinned = bool(pinned)
 
-    # If `branch` was given as `android16` / `android17` / `all`, also treat it as target Android.
+    # If `branch` was given as `android16` / `android17` / `all`, also treat it as target AOSP.
     if bt_ref and not raw_targets:
         low_ref = bt_ref.lower()
         if low_ref in ("all", "both") or low_ref in available:
@@ -408,7 +419,7 @@ def parse_event(
         return {
             "should_build": False,
             "reason": (
-                "no target Android version identified; specify android17, android16, or all"
+                "no target AOSP version identified; specify android17, android16, or all"
             ),
         }
 
@@ -423,13 +434,14 @@ def parse_event(
         return {
             "should_build": False,
             "reason": (
-                f"custom translator ref {bt_ref!r} cannot be applied to multiple Android versions "
-                f"({', '.join(versions)}); specify a single Android version"
+                f"custom translator ref {bt_ref!r} cannot be applied to multiple AOSP versions "
+                f"({', '.join(versions)}); specify a single AOSP version or leave the translator "
+                "branch blank"
             ),
         }
 
     # Unless `pinned` was explicitly requested, issue-triggered builds track the
-    # live HEAD of each target Android branch (or the requested custom bt_ref).
+    # live HEAD of each target AOSP branch (or the requested custom bt_ref).
     use_branch_head = not pinned
 
     return {

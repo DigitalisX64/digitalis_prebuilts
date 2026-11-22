@@ -128,7 +128,7 @@ def verify_bundle_dir(bundle_dir, config_mk, tree_top=None, check_symbols=True):
         for key in (
             "release-id:",
             "branch:",
-            "android-release:",
+            "aosp-release:",
             "build-date:",
             "build-username:",
             "binary_translation-sha:",

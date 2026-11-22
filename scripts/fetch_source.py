@@ -167,7 +167,7 @@ def main(argv=None):
     ap.add_argument(
         "--use-branch-head",
         action="store_true",
-        help="resolve DigitalisX64 repos from the live HEAD of the target android branch",
+        help="resolve DigitalisX64 repos from the live HEAD of the target AOSP branch",
     )
     args = ap.parse_args(argv)
 

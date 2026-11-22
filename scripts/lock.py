@@ -133,7 +133,7 @@ def get_version(lock_data, android):
         if entry["android"] == android:
             return entry
     avail = ", ".join(v["android"] for v in lock_data["versions"])
-    raise LockError(f"unknown android version {android!r}; available: {avail}")
+    raise LockError(f"unknown AOSP branch {android!r}; available: {avail}")
 
 
 def get_project(version, path):

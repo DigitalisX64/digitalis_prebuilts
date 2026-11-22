@@ -2,7 +2,7 @@
 
 Automated GitHub Actions CI that builds and publishes binary-only
 [Digitalis](https://github.com/DigitalisX64) ARM64-to-x86_64 translator prebuilt
-bundles for **Android 16 (`android16`)** and **Android 17 (`android17`)** on
+bundles for **AOSP 16 (`android16`)** and **AOSP 17 (`android17`)** on
 standard GitHub-hosted `ubuntu-24.04` runners.
 
 > [!TIP]
@@ -20,7 +20,7 @@ Create a new issue (or use the [**Build Digitalis Prebuilts** form](../../issues
 with a body like:
 
 ```yaml
-android: android17
+aosp: android17
 branch: android17
 release: true
 ```
@@ -29,7 +29,7 @@ Or build a custom branch / commit in `platform_frameworks_libs_binary_translatio
 without publishing a release:
 
 ```yaml
-android: android17
+aosp: android17
 branch: fix/my-change
 release: false
 ```
@@ -37,9 +37,19 @@ release: false
 Or build both `android17` and `android16` and publish one release per branch:
 
 ```yaml
-android: all
+aosp: all
 release: true
 ```
+
+> [!NOTE]
+> **Translator branch or commit (`branch`) when Target AOSP is `all`:**
+> - **Leave it blank (required for `all`):** each AOSP target builds from the
+>   latest `HEAD` of its own matching branch (`android17` for AOSP 17 and
+>   `android16` for AOSP 16).
+> - **Setting a custom branch/commit with `all` is rejected**, because a single
+>   translator branch or commit cannot build against both AOSP 16 and AOSP 17.
+>   Select a single AOSP target (`android17` or `android16`) to build a custom
+>   translator branch or commit.
 
 ### Comment Commands (Everything Works via Comments)
 
@@ -51,10 +61,10 @@ builds purely with comments:
 | --- | --- |
 | `/build android17` | Build latest `android17` branch HEAD (workflow artifact only) |
 | `/build android16` | Build latest `android16` branch HEAD (workflow artifact only) |
-| `/build all` | Build both `android17` and `android16` |
+| `/build all` | Build both `android17` and `android16` from their respective branch HEADs |
 | `/build android17 release` (or `/release android17`) | Build and publish a GitHub Release (`android17-<YYYY-MM-DD>-<bt_sha>`) |
 | `/build all release` (or `/release all`) | Build both branches and publish one GitHub Release per branch |
-| `/build android17 branch=<ref> release` | Build a custom branch, tag, or SHA in `platform_frameworks_libs_binary_translation` |
+| `/build android17 branch=<ref> release` | Build a custom branch, tag, or SHA in `platform_frameworks_libs_binary_translation` (single AOSP target only) |
 | `/build android17 release tag=<tag>` | Publish a single-branch release with a custom tag |
 | `/build android17 pinned` | Build the commit pinned in `config/versions.json` instead of live branch HEAD |
 | `/rebuild` (or bare `/build`) | Re-run the build inheriting the parent issue's target, branch, and release settings |
@@ -68,7 +78,7 @@ You can also combine `/build` with multi-line key-value options in a comment:
 
 ```text
 /build
-android: android17
+aosp: android17
 branch: fix/my-change
 release: true
 ```
@@ -100,7 +110,7 @@ Each archive unpacks to `digitalis-prebuilts/` containing:
 - `digitalis-prebuilts.mk` for single-line AOSP product integration
 - `MANIFEST.txt`, `SOURCES.json`, `SHA256SUMS`, `README.md`, and `LICENSE`
 
-Match the bundle's Android version (`android16` / API 36 or `android17` / API 37)
+Match the bundle's AOSP version (`android16` / API 36 or `android17` / API 37)
 to your AOSP tree.
 
 ## Integrating into an x86_64 AOSP product

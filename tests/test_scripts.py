@@ -222,7 +222,7 @@ class IssueTriggerParsingTests(unittest.TestCase):
         self.assertIn("not authorized", res["reason"])
 
     def test_parses_issue_form(self):
-        body = """### Target Android
+        body = """### Target AOSP
 
 android17
 
@@ -315,10 +315,10 @@ v2026.11.22
             comment_body="/build all branch=fix/only-17",
         )
         self.assertFalse(res["should_build"])
-        self.assertIn("multiple Android versions", res["reason"])
+        self.assertIn("multiple AOSP versions", res["reason"])
 
     def test_rebuild_and_release_comment_inherit_parent_issue_fields(self):
-        parent_body = "android: android17\nbranch: fix/foo\nrelease: true\n"
+        parent_body = "aosp: android17\nbranch: fix/foo\nrelease: true\n"
         res = parse_issue_trigger.parse_event(
             event_name="issue_comment",
             author_association="OWNER",
@@ -347,7 +347,7 @@ v2026.11.22
             event_name="issue_comment",
             author_association="OWNER",
             title="[Build] android16",
-            body="android: android16\nrelease: false\n",
+            body="aosp: android16\nrelease: false\n",
             comment_body="/release",
         )
         self.assertTrue(res_rel["should_build"])
@@ -360,12 +360,20 @@ v2026.11.22
             author_association="OWNER",
             title="Trigger issue",
             body="",
-            comment_body="/build\nandroid: android17\nbranch: fix/my-change\nrelease: true\n",
+            comment_body="/build\naosp: android17\nbranch: fix/my-change\nrelease: true\n",
         )
         self.assertTrue(res["should_build"])
         self.assertEqual(res["versions"], ["android17"])
         self.assertEqual(res["bt_ref"], "fix/my-change")
         self.assertTrue(res["publish_release"])
+
+        res_aosp_tok = parse_issue_trigger.parse_event(
+            event_name="issue_comment",
+            author_association="OWNER",
+            comment_body="/build aosp17",
+        )
+        self.assertTrue(res_aosp_tok["should_build"])
+        self.assertEqual(res_aosp_tok["versions"], ["android17"])
 
     def test_parse_control_commands(self):
         self.assertEqual(
@@ -530,7 +538,7 @@ class ReleaseNotesTests(unittest.TestCase):
         return {
             "release-id": f"{branch}-2026-11-22-{bt}",
             "branch": branch,
-            "android-release": "android17",
+            "aosp-release": "android17",
             "build-date": "2026-11-22",
             "binary_translation-sha": bt,
             "digitalis-sha": dig,

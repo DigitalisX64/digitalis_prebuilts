@@ -452,8 +452,8 @@ def render_release_notes(
     max_commits=15,
 ):
     """Render concise Markdown release notes for a Digitalis prebuilt release."""
-    branch = manifest.get("branch") or manifest.get("android-release") or "unknown"
-    android = manifest.get("android-release") or branch
+    branch = manifest.get("branch") or manifest.get("aosp-release") or manifest.get("android-release") or "unknown"
+    aosp = manifest.get("aosp-release") or manifest.get("android-release") or branch
     build_date = manifest.get("build-date") or "unknown"
     bt_sha = manifest.get("binary_translation-sha") or "unknown"
     dig_sha = manifest.get("digitalis-sha") or "unknown"
@@ -465,7 +465,7 @@ def render_release_notes(
         f"# Digitalis Prebuilts ({tag})",
         "",
         (
-            f"Binary-only ARM64-to-x86_64 Digitalis translator bundle for **{android}**, "
+            f"Binary-only ARM64-to-x86_64 Digitalis translator bundle for **{aosp}**, "
             "built via unbundled AOSP Soong CI and verified with host tests."
         ),
         "",
@@ -589,7 +589,7 @@ def main(argv=None):
     if args.sources and args.sources.is_file():
         curr_sources = json.loads(args.sources.read_text(encoding="utf-8"))
 
-    branch = manifest.get("branch") or manifest.get("android-release") or ""
+    branch = manifest.get("branch") or manifest.get("aosp-release") or manifest.get("android-release") or ""
     prev_release = None
     prev_sources = None
     prev_manifest = None

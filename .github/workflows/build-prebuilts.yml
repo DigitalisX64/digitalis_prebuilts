@@ -13,8 +13,8 @@ on:
     types: [created]
   workflow_dispatch:
     inputs:
-      android:
-        description: "Android target to build"
+      aosp:
+        description: "AOSP target to build"
         type: choice
         default: "all"
         options:
@@ -22,12 +22,12 @@ on:
           - android17
           - android16
       bt_ref:
-        description: "Optional branch, tag, or SHA in platform_frameworks_libs_binary_translation (empty = pinned in config/versions.json)"
+        description: "Optional branch, tag, or SHA in platform_frameworks_libs_binary_translation (empty = pinned in config/versions.json; must be empty when aosp is 'all')"
         type: string
         required: false
         default: ""
       use_branch_head:
-        description: "Build latest HEAD of the target Android branch on GitHub instead of the lockfile SHA"
+        description: "Build latest HEAD of the target AOSP branch on GitHub instead of the lockfile SHA"
         type: boolean
         default: false
       publish_release:
@@ -59,7 +59,7 @@ jobs:
       issues: write
     outputs:
       should_build: ${{ steps.plan.outputs.should_build }}
-      android_matrix: ${{ steps.plan.outputs.android_matrix }}
+      aosp_matrix: ${{ steps.plan.outputs.aosp_matrix }}
       build_date: ${{ steps.plan.outputs.build_date }}
       bt_ref: ${{ steps.plan.outputs.bt_ref }}
       digitalis_ref: ${{ steps.plan.outputs.digitalis_ref }}
@@ -74,7 +74,7 @@ jobs:
         id: plan
         env:
           EVENT_NAME: ${{ github.event_name }}
-          INPUT_ANDROID: ${{ inputs.android }}
+          INPUT_AOSP: ${{ inputs.aosp }}
           INPUT_BT_REF: ${{ inputs.bt_ref }}
           INPUT_USE_HEAD: ${{ inputs.use_branch_head }}
           INPUT_PUBLISH: ${{ inputs.publish_release }}
@@ -134,14 +134,18 @@ jobs:
               echo "skipping build: $(jq -r .reason <<<"$parsed")"
             fi
           else
-            if [[ -n "$INPUT_ANDROID" && "$INPUT_ANDROID" != "all" ]]; then
-              echo "$all_versions" | jq -e --arg v "$INPUT_ANDROID" 'index($v) != null' >/dev/null \
-                || { echo "::error::version $INPUT_ANDROID not in config/versions.json"; exit 1; }
-              matrix="$(jq -cn --arg v "$INPUT_ANDROID" '[$v]')"
+            if [[ -n "$INPUT_AOSP" && "$INPUT_AOSP" != "all" ]]; then
+              echo "$all_versions" | jq -e --arg v "$INPUT_AOSP" 'index($v) != null' >/dev/null \
+                || { echo "::error::version $INPUT_AOSP not in config/versions.json"; exit 1; }
+              matrix="$(jq -cn --arg v "$INPUT_AOSP" '[$v]')"
             else
               matrix="$all_versions"
             fi
             bt_ref="${INPUT_BT_REF:-}"
+            if [[ -n "$bt_ref" && "$(jq 'length' <<<"$matrix")" -gt 1 ]]; then
+              echo "::error::custom translator ref '$bt_ref' cannot be applied when targeting all AOSP versions; select a single AOSP target or leave bt_ref blank"
+              exit 1
+            fi
             use_branch_head="${INPUT_USE_HEAD:-false}"
             if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
               should_release="true"
@@ -153,7 +157,7 @@ jobs:
           fi
 
           echo "should_build=$should_build" >> "$GITHUB_OUTPUT"
-          echo "android_matrix=$matrix" >> "$GITHUB_OUTPUT"
+          echo "aosp_matrix=$matrix" >> "$GITHUB_OUTPUT"
           echo "build_date=$build_date" >> "$GITHUB_OUTPUT"
           echo "bt_ref=$bt_ref" >> "$GITHUB_OUTPUT"
           echo "digitalis_ref=$digitalis_ref" >> "$GITHUB_OUTPUT"
@@ -163,7 +167,7 @@ jobs:
           echo "issue_number=$issue_number" >> "$GITHUB_OUTPUT"
 
   build:
-    name: Build (${{ matrix.android }})
+    name: Build (${{ matrix.aosp }})
     needs: plan
     if: needs.plan.outputs.should_build == 'true'
     runs-on: ubuntu-24.04
@@ -171,14 +175,14 @@ jobs:
     permissions:
       contents: read
     concurrency:
-      group: build-prebuilts-${{ matrix.android }}-${{ needs.plan.outputs.issue_number || github.ref }}
+      group: build-prebuilts-${{ matrix.aosp }}-${{ needs.plan.outputs.issue_number || github.ref }}
       cancel-in-progress: false
     strategy:
       fail-fast: false
       matrix:
-        android: ${{ fromJSON(needs.plan.outputs.android_matrix) }}
+        aosp: ${{ fromJSON(needs.plan.outputs.aosp_matrix) }}
     env:
-      ANDROID_BRANCH: ${{ matrix.android }}
+      AOSP_BRANCH: ${{ matrix.aosp }}
       BUILD_DATE: ${{ needs.plan.outputs.build_date }}
       BT_REF: ${{ needs.plan.outputs.bt_ref }}
       DIGITALIS_REF: ${{ needs.plan.outputs.digitalis_ref }}
@@ -187,7 +191,7 @@ jobs:
       - uses: actions/checkout@v7
 
       - name: Free runner disk and add swap
-        run: scripts/free-runner-disk.sh "digitalis-${ANDROID_BRANCH}"
+        run: scripts/free-runner-disk.sh "digitalis-${AOSP_BRANCH}"
 
       - name: Install build tools
         run: |
@@ -198,7 +202,7 @@ jobs:
       - name: Fetch pinned AOSP framework and unproxied guest libraries
         run: |
           python3 scripts/fetch_aosp_libs.py \
-            --android "$ANDROID_BRANCH" \
+            --android "$AOSP_BRANCH" \
             --framework-out "$DIGITALIS_WORK/framework-libs" \
             --guest-out "$DIGITALIS_WORK/guest-libs" \
             --work-dir "$DIGITALIS_WORK"
@@ -218,7 +222,7 @@ jobs:
             extra_args+=(--use-branch-head)
           fi
           python3 scripts/fetch_source.py \
-            --android "$ANDROID_BRANCH" \
+            --android "$AOSP_BRANCH" \
             --top "$DIGITALIS_WORK/aosp" \
             --jobs 8 \
             "${extra_args[@]}"
@@ -243,7 +247,7 @@ jobs:
             --product-out "$DIGITALIS_WORK/aosp/out/target/product/digitalis_prebuilts" \
             --guest-libs "$DIGITALIS_WORK/guest-libs" \
             --out "$DIGITALIS_WORK/dist" \
-            --android "$ANDROID_BRANCH" \
+            --android "$AOSP_BRANCH" \
             --date "$BUILD_DATE" \
             --username "digitalis-ci" \
             --sources "$DIGITALIS_WORK/aosp/.digitalis-sources.json" \
@@ -288,7 +292,7 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@v7
         with:
-          name: build-logs-${{ matrix.android }}
+          name: build-logs-${{ matrix.aosp }}
           path: |
             ${{ env.DIGITALIS_WORK }}/aosp/out/error.log
             ${{ env.DIGITALIS_WORK }}/aosp/out/soong.log

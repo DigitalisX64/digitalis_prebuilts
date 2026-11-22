@@ -34,11 +34,11 @@ GUEST_PREFIXES = ("system/lib64/arm64/", "system/bin/arm64/")
 
 BUNDLE_README = """# Digitalis prebuilts — ARM64-to-x86_64 translator (binary-only)
 
-This bundle lets an **x86_64 Android (AOSP) product** run **arm64-v8a-only** apps by
+This bundle lets an **x86_64 AOSP product** run **arm64-v8a-only** apps by
 dropping in the prebuilt Digitalis translator — no need to build Berberis from source.
 It contains binaries, configs, and one integration makefile (`digitalis-prebuilts.mk`).
 
-See `MANIFEST.txt` for this bundle's Android version, build date, builder identity,
+See `MANIFEST.txt` for this bundle's AOSP version, build date, builder identity,
 source revisions, and artifact count, `SOURCES.json` for every pinned upstream commit,
 and `SHA256SUMS` for per-file integrity.
 
@@ -77,8 +77,8 @@ digitalis-prebuilts.mk                            # AOSP product integration mak
    $(call inherit-product, vendor/digitalis/prebuilts/digitalis-prebuilts.mk)
    ```
 
-4. Build your product as usual (`m`). Match the bundle's Android release (`MANIFEST.txt`)
-   to your AOSP tree; mixing bundles across Android versions is unsupported.
+4. Build your product as usual (`m`). Match the bundle's AOSP release (`MANIFEST.txt`)
+   to your AOSP tree; mixing bundles across AOSP versions is unsupported.
 
 ## Verify
 
@@ -291,7 +291,7 @@ def package_bundle(
         "Digitalis binary distribution (ARM64 -> x86_64 translator)",
         f"release-id:             {release_id}",
         f"branch:                 {branch_label}",
-        f"android-release:        {android}",
+        f"aosp-release:           {android}",
         f"build-date:             {build_date}",
         f"build-username:         {username}",
         "target-product:         digitalis_prebuilts",
