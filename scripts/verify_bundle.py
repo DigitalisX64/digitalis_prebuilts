@@ -32,12 +32,14 @@ import package_bundle  # noqa: E402
 
 def find_readelf(tree_top=None):
     if tree_top:
-        llvm_readelf = (
-            Path(tree_top)
-            / "prebuilts/clang/host/linux-x86/llvm-binutils-stable/llvm-readelf"
-        )
-        if llvm_readelf.is_file():
-            return str(llvm_readelf)
+        clang_root = Path(tree_top) / "prebuilts/clang/host/linux-x86"
+        candidates = [
+            clang_root / "llvm-binutils-stable/llvm-readelf",
+            *sorted(clang_root.glob("clang-*/bin/llvm-readelf")),
+        ]
+        for llvm_readelf in candidates:
+            if llvm_readelf.is_file():
+                return str(llvm_readelf)
     for tool in ("llvm-readelf", "readelf"):
         found = shutil.which(tool)
         if found:

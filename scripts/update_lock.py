@@ -17,9 +17,9 @@
 """Refresh pinned commits in config/versions.json.
 
 Examples:
-    scripts/update-lock.py --digitalis-only
-    scripts/update-lock.py --android android17
-    scripts/update-lock.py --missing
+    scripts/update_lock.py --digitalis-only
+    scripts/update_lock.py --android android17
+    scripts/update_lock.py --missing
 """
 
 import argparse

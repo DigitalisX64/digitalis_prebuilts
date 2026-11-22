@@ -440,6 +440,11 @@ def parse_event(
             ),
         }
 
+    # Custom release tags only apply to single-branch releases; multi-branch builds
+    # always publish one GitHub Release per branch using <branch>-<date>-<sha>.
+    if len(versions) > 1:
+        release_tag = ""
+
     # Unless `pinned` was explicitly requested, issue-triggered builds track the
     # live HEAD of each target AOSP branch (or the requested custom bt_ref).
     use_branch_head = not pinned

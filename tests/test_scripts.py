@@ -21,6 +21,7 @@ import json
 import re
 import stat
 import sys
+import tarfile
 import tempfile
 import unittest
 import zipfile
@@ -148,6 +149,9 @@ class PackagingAndVerificationTests(unittest.TestCase):
             )
             self.assertEqual(tarball.name, "digitalis-prebuilts-android17-2026-11-22-5d66dd11.tar.gz")
             self.assertTrue(sha_path.is_file())
+            with tarfile.open(tarball, "r:gz") as tf:
+                for member in tf.getmembers():
+                    self.assertEqual((member.uid, member.gid, member.uname, member.gname), (0, 0, "root", "root"))
             manifest_text = (bundle_dir / "MANIFEST.txt").read_text(encoding="utf-8")
             self.assertIn("release-id:             android17-2026-11-22-5d66dd11", manifest_text)
             self.assertIn("manifest-sha:           9cd17507", manifest_text)
@@ -316,6 +320,16 @@ v2026.11.22
         )
         self.assertFalse(res["should_build"])
         self.assertIn("multiple AOSP versions", res["reason"])
+
+        res_tag_all = parse_issue_trigger.parse_event(
+            event_name="issue_comment",
+            author_association="OWNER",
+            comment_body="/build all release tag=v2026.11.23",
+        )
+        self.assertTrue(res_tag_all["should_build"])
+        self.assertEqual(res_tag_all["versions"], ["android17", "android16"])
+        self.assertTrue(res_tag_all["publish_release"])
+        self.assertEqual(res_tag_all["release_tag"], "")
 
     def test_rebuild_and_release_comment_inherit_parent_issue_fields(self):
         parent_body = "aosp: android17\nbranch: fix/foo\nrelease: true\n"

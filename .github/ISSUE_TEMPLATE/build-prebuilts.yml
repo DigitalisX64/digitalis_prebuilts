@@ -45,5 +45,9 @@ body:
     id: release_tag
     attributes:
       label: Release tag (optional)
-      description: Custom tag for a single-branch release. Leave blank to use <branch>-<YYYY-MM-DD>-<bt_sha> per branch (e.g. android17-2026-11-22-5d66dd11).
+      description: >-
+        Custom tag for a single-branch release. Ignored when Target AOSP is "all"
+        (because "all" publishes one separate GitHub Release per branch using
+        <branch>-<YYYY-MM-DD>-<bt_sha>). Leave blank for the default per-branch tag
+        (e.g. android17-2026-11-22-5d66dd11).
       placeholder: android17-2026-11-22-5d66dd11

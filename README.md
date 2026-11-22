@@ -42,14 +42,15 @@ release: true
 ```
 
 > [!NOTE]
-> **Translator branch or commit (`branch`) when Target AOSP is `all`:**
-> - **Leave it blank (required for `all`):** each AOSP target builds from the
->   latest `HEAD` of its own matching branch (`android17` for AOSP 17 and
->   `android16` for AOSP 16).
-> - **Setting a custom branch/commit with `all` is rejected**, because a single
->   translator branch or commit cannot build against both AOSP 16 and AOSP 17.
->   Select a single AOSP target (`android17` or `android16`) to build a custom
->   translator branch or commit.
+> **Behavior of optional fields when Target AOSP is `all`:**
+> - **Translator branch or commit (`branch`):** must be left blank for `all`
+>   (each AOSP target then builds from the latest `HEAD` of its own matching
+>   branch: `android17` for AOSP 17 and `android16` for AOSP 16). Setting a
+>   custom branch or commit with `all` is rejected because one translator ref
+>   cannot build against both AOSP 16 and AOSP 17.
+> - **Release tag (`tag` / `release_tag`):** only applies to a single AOSP
+>   target; ignored when targeting `all`, because `all` publishes one separate
+>   GitHub Release per branch tagged `<branch>-<YYYY-MM-DD>-<bt_sha>`.
 
 ### Comment Commands (Everything Works via Comments)
 

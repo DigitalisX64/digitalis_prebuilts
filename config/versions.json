@@ -1,5 +1,5 @@
 {
-  "comment": "Pinned Digitalis and minimal AOSP inputs for unbundled prebuilt builds. Refresh with scripts/update-lock.py.",
+  "comment": "Pinned Digitalis and minimal AOSP inputs for unbundled prebuilt builds. Refresh with scripts/update_lock.py.",
   "versions": [
     {
       "android": "android17",

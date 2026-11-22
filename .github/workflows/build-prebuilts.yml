@@ -35,7 +35,7 @@ on:
         type: boolean
         default: false
       release_tag:
-        description: "Optional custom release tag (single-branch builds only; default: <branch>-<YYYY-MM-DD>-<bt_sha> per branch)"
+        description: "Optional custom release tag (single AOSP target only; ignored when aosp is 'all', which uses <branch>-<YYYY-MM-DD>-<bt_sha> per branch)"
         type: string
         required: false
         default: ""
@@ -116,7 +116,7 @@ jobs:
               targets_csv="$(jq -r 'join(", ")' <<<"$matrix")"
               rel_suffix=""
               if [[ "$should_release" == "true" ]]; then
-                if [[ -n "$release_tag" ]]; then
+                if [[ -n "$release_tag" && "$(jq 'length' <<<"$matrix")" -eq 1 ]]; then
                   rel_suffix=" (\`${release_tag}\`)"
                 else
                   rel_suffix=" (\`<branch>-${build_date}-<sha>\` per branch)"
@@ -152,7 +152,11 @@ jobs:
               release_tag=""
             elif [[ "$INPUT_PUBLISH" == "true" ]]; then
               should_release="true"
-              release_tag="${INPUT_TAG:-}"
+              if [[ "$(jq 'length' <<<"$matrix")" -eq 1 ]]; then
+                release_tag="${INPUT_TAG:-}"
+              else
+                release_tag=""
+              fi
             fi
           fi
 

@@ -55,34 +55,65 @@ if command -v docker >/dev/null 2>&1; then
 fi
 sudo apt-get clean
 
-free_kib() {
-  df -k --output=avail "$1" 2>/dev/null | tail -n 1 | tr -d ' ' || echo 0
+free_gib() {
+  local kib
+  kib="$(df -k --output=avail "$1" 2>/dev/null | tail -n 1 | tr -d ' ' || echo 0)"
+  echo $(( kib / 1024 / 1024 ))
 }
 
-root_free="$(free_kib /)"
-mnt_free=0
+root_free_gb="$(free_gib /)"
+mnt_free_gb=0
 if mountpoint -q /mnt; then
-  mnt_free="$(free_kib /mnt)"
+  mnt_free_gb="$(free_gib /mnt)"
 fi
 
-if (( mnt_free > root_free )); then
+if (( mnt_free_gb > root_free_gb )); then
   work_dir="/mnt/$WORK_NAME"
-  swap_dir="$HOME"
+  swap_candidates=("$HOME" "/mnt")
 else
   work_dir="$HOME/$WORK_NAME"
-  swap_dir="/mnt"
-  (( mnt_free > 0 )) || swap_dir="$HOME"
+  swap_candidates=("/mnt" "$HOME")
 fi
 
 sudo mkdir -p "$work_dir"
 sudo chown "$(id -u):$(id -g)" "$work_dir"
 
-if ! swapon --show=NAME --noheadings | grep -q digitalis-swap; then
-  sudo fallocate -l 12G "$swap_dir/digitalis-swap" 2>/dev/null \
-    || sudo dd if=/dev/zero of="$swap_dir/digitalis-swap" bs=1M count=12288 status=none
-  sudo chmod 600 "$swap_dir/digitalis-swap"
-  sudo mkswap "$swap_dir/digitalis-swap" >/dev/null
-  sudo swapon "$swap_dir/digitalis-swap"
+# Top up swap to ~12 GiB total without exhausting a smaller /mnt partition.
+existing_swap_gb="$(free -g | awk '/^Swap:/{print $2}')"
+target_add_gb=$(( 12 - ${existing_swap_gb:-0} ))
+if (( target_add_gb > 0 )) && ! swapon --show=NAME --noheadings | grep -q digitalis-swap; then
+  for cand in "${swap_candidates[@]}"; do
+    [[ -d "$cand" ]] || continue
+    if [[ "$cand" == "/mnt" ]] && ! mountpoint -q /mnt; then
+      continue
+    fi
+    cand_free_gb="$(free_gib "$cand")"
+    # Keep at least 2 GiB headroom on non-work partition, or 25 GiB on work partition.
+    if [[ "$work_dir" == "$cand"/* ]]; then
+      reserve_gb=25
+    else
+      reserve_gb=2
+    fi
+    usable_gb=$(( cand_free_gb - reserve_gb ))
+    if (( usable_gb < 2 )); then
+      continue
+    fi
+    swap_gb="$target_add_gb"
+    if (( swap_gb > usable_gb )); then
+      swap_gb="$usable_gb"
+    fi
+    swap_file="$cand/digitalis-swap"
+    echo "configuring ${swap_gb}G swap at $swap_file (${cand_free_gb}G free)"
+    if sudo fallocate -l "${swap_gb}G" "$swap_file" 2>/dev/null \
+      || { sudo rm -f "$swap_file"; sudo dd if=/dev/zero of="$swap_file" bs=1M count=$(( swap_gb * 1024 )) status=none; }; then
+      sudo chmod 600 "$swap_file"
+      if sudo mkswap "$swap_file" >/dev/null && sudo swapon "$swap_file"; then
+        break
+      fi
+    fi
+    sudo rm -f "$swap_file"
+    echo "::warning::failed to enable ${swap_gb}G swap at $swap_file; continuing without extra swap"
+  done
 fi
 
 # Soong's nsjail/genrule sandboxes use unprivileged user namespaces, which

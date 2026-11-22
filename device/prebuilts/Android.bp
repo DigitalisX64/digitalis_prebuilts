@@ -15,8 +15,8 @@
  */
 
 // Prebuilt x86_64 AOSP framework libraries that libberberis_proxy_* link
-// against. Populated under x86_64/ by scripts/fetch-aosp-libs.py from the
-// pinned AOSP x86_64 target_files archive for the matching Android release.
+// against. Populated under x86_64/ by scripts/fetch_aosp_libs.py from the
+// pinned AOSP x86_64 target_files archive for the matching AOSP release.
 
 package {
     default_applicable_licenses: ["Android-Apache-2.0"],
