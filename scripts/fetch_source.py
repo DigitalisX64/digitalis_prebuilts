@@ -175,6 +175,15 @@ def main(argv=None):
     tree_top = args.top.resolve()
     tree_top.mkdir(parents=True, exist_ok=True)
 
+    manifest_info = dict(version["manifest"])
+    if args.use_branch_head:
+        manifest_sha = resolve_remote_ref(manifest_info["url"], manifest_info["branch"])
+        print(
+            f"override manifest: {manifest_info['branch']} -> {manifest_sha[:12]}",
+            flush=True,
+        )
+        manifest_info["commit"] = manifest_sha
+
     projects = apply_ref_overrides(
         version["projects"],
         android=args.android,
@@ -214,7 +223,7 @@ def main(argv=None):
         "api": version["api"],
         "aosp_branch": version["aosp_branch"],
         "aosp_images": version["aosp_images"],
-        "manifest": version["manifest"],
+        "manifest": manifest_info,
         "superproject": version["superproject"],
         "clang": clang_versions,
         "rust": rust_versions,

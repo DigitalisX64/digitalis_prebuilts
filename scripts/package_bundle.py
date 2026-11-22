@@ -185,6 +185,24 @@ def sha256_file(path):
     return h.hexdigest()
 
 
+def build_branch_label(android, bt_ref=""):
+    """Compute a filesystem- and git-tag-safe branch label for prebuilt/release names.
+
+    - Standard branch build (`android17`, or `bt_ref="android17"`): `android17`
+    - Raw 40-char commit SHA override: `android17` (the short SHA is appended separately)
+    - Custom branch override (e.g. `fix/foo` on `android17`): `android17-fix-foo`
+    """
+    ref = (bt_ref or "").strip()
+    if not ref or ref == android or re.fullmatch(r"[0-9a-f]{40}", ref):
+        return android
+    sanitized = re.sub(r"[^A-Za-z0-9._-]+", "-", ref).strip("-.")
+    if not sanitized or sanitized == android:
+        return android
+    if sanitized.startswith(f"{android}-"):
+        return sanitized
+    return f"{android}-{sanitized}"
+
+
 def package_bundle(
     config_mk,
     product_out,
@@ -195,6 +213,7 @@ def package_bundle(
     username,
     sources_json=None,
     license_file=None,
+    bt_ref="",
 ):
     artifacts = list_artifacts(config_mk)
     product_out = Path(product_out)
@@ -246,33 +265,46 @@ def package_bundle(
 
     bt_sha = "unknown"
     digitalis_sha = "unknown"
+    manifest_sha = "unknown"
+    resolved_ref = bt_ref
     if sources_json and Path(sources_json).is_file():
         src_data = json.loads(Path(sources_json).read_text(encoding="utf-8"))
         projs = src_data.get("projects", {})
         if "frameworks/libs/binary_translation" in projs:
-            bt_sha = projs["frameworks/libs/binary_translation"]["commit"][:8]
+            bt_proj = projs["frameworks/libs/binary_translation"]
+            bt_sha = bt_proj["commit"][:8]
+            if not resolved_ref and bt_proj.get("ref"):
+                resolved_ref = bt_proj["ref"]
         if "digitalis" in projs:
             digitalis_sha = projs["digitalis"]["commit"][:8]
+        if isinstance(src_data.get("manifest"), dict) and src_data["manifest"].get("commit"):
+            manifest_sha = src_data["manifest"]["commit"][:8]
         shutil.copy2(sources_json, bundle_dir / "SOURCES.json")
 
     if license_file and Path(license_file).is_file():
         shutil.copy2(license_file, bundle_dir / "LICENSE")
 
+    branch_label = build_branch_label(android, resolved_ref)
+    release_id = f"{branch_label}-{build_date}-{bt_sha}"
+
     manifest_lines = [
         "Digitalis binary distribution (ARM64 -> x86_64 translator)",
+        f"release-id:             {release_id}",
+        f"branch:                 {branch_label}",
         f"android-release:        {android}",
         f"build-date:             {build_date}",
         f"build-username:         {username}",
         "target-product:         digitalis_prebuilts",
         f"binary_translation-sha: {bt_sha}",
         f"digitalis-sha:          {digitalis_sha}",
+        f"manifest-sha:           {manifest_sha}",
         f"artifact-count:         {len(artifacts)}",
         f"artifacts-from-build:   {from_build}",
         f"artifacts-from-image:   {from_image}",
     ]
     (bundle_dir / "MANIFEST.txt").write_text("\n".join(manifest_lines) + "\n", encoding="utf-8")
 
-    tarball_name = f"digitalis-prebuilts-{android}-{build_date}-{bt_sha}.tar.gz"
+    tarball_name = f"digitalis-prebuilts-{release_id}.tar.gz"
     tarball_path = out_dir / tarball_name
     with tarfile.open(tarball_path, "w:gz") as tf:
         tf.add(bundle_dir, arcname="digitalis-prebuilts")
@@ -283,7 +315,7 @@ def package_bundle(
 
     print(
         f"packaged {tarball_path} ({tarball_path.stat().st_size} bytes; "
-        f"{from_build} built + {from_image} image guest libs)"
+        f"release_id={release_id}; {from_build} built + {from_image} image guest libs)"
     )
     return bundle_dir, tarball_path, sha_path
 
@@ -306,6 +338,7 @@ def main(argv=None):
     p.add_argument("--username", default="digitalis-ci")
     p.add_argument("--sources", type=Path)
     p.add_argument("--license", type=Path)
+    p.add_argument("--bt-ref", default="")
 
     args = ap.parse_args(argv)
     if args.cmd == "targets":
@@ -321,6 +354,7 @@ def main(argv=None):
             username=args.username,
             sources_json=args.sources,
             license_file=args.license,
+            bt_ref=args.bt_ref,
         )
 
 

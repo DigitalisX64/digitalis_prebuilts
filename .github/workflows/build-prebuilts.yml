@@ -32,7 +32,7 @@ on:
         type: boolean
         default: false
       release_tag:
-        description: "Release tag when publish_release is true (defaults to prebuilts-YYYY-MM-DD)"
+        description: "Optional custom release tag (single-branch builds only; default: <branch>-<YYYY-MM-DD>-<bt_sha> per branch)"
         type: string
         required: false
         default: ""
@@ -103,9 +103,6 @@ jobs:
               use_branch_head="$(jq -r .use_branch_head <<<"$parsed")"
               should_release="$(jq -r .publish_release <<<"$parsed")"
               release_tag="$(jq -r .release_tag <<<"$parsed")"
-              if [[ "$should_release" == "true" && -z "$release_tag" ]]; then
-                release_tag="prebuilts-${build_date}"
-              fi
               run_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
               ref_note="${bt_ref:-branch HEAD (latest)}"
               if [[ "$use_branch_head" != "true" && -z "$bt_ref" ]]; then
@@ -113,8 +110,12 @@ jobs:
               fi
               targets_csv="$(jq -r 'join(", ")' <<<"$matrix")"
               rel_suffix=""
-              if [[ -n "$release_tag" ]]; then
-                rel_suffix=" (\`${release_tag}\`)"
+              if [[ "$should_release" == "true" ]]; then
+                if [[ -n "$release_tag" ]]; then
+                  rel_suffix=" (\`${release_tag}\`)"
+                else
+                  rel_suffix=" (\`<branch>-${build_date}-<sha>\` per branch)"
+                fi
               fi
               gh issue comment "$issue_number" --body-file - <<EOF
           Triggered prebuilt build from this issue:
@@ -138,10 +139,10 @@ jobs:
             use_branch_head="${INPUT_USE_HEAD:-false}"
             if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
               should_release="true"
-              release_tag="${GITHUB_REF_NAME}"
+              release_tag=""
             elif [[ "$INPUT_PUBLISH" == "true" ]]; then
               should_release="true"
-              release_tag="${INPUT_TAG:-prebuilts-${build_date}}"
+              release_tag="${INPUT_TAG:-}"
             fi
           fi
 
@@ -264,6 +265,7 @@ jobs:
             "digitalis-ccache-${ANDROID_BRANCH}-${{ hashFiles('config/versions.json') }}-${GITHUB_RUN_ID}"
 
       - name: Package canonical Digitalis prebuilt bundle
+        id: pkg
         run: |
           python3 scripts/package_bundle.py package \
             --config-mk "$DIGITALIS_WORK/aosp/frameworks/libs/binary_translation/berberis_config.mk" \
@@ -274,9 +276,12 @@ jobs:
             --date "$BUILD_DATE" \
             --username "digitalis-ci" \
             --sources "$DIGITALIS_WORK/aosp/.digitalis-sources.json" \
-            --license "$DIGITALIS_WORK/aosp/digitalis/LICENSE"
+            --license "$DIGITALIS_WORK/aosp/digitalis/LICENSE" \
+            --bt-ref "$BT_REF"
           ls -lh "$DIGITALIS_WORK/dist"
           cat "$DIGITALIS_WORK/dist/digitalis-prebuilts/MANIFEST.txt"
+          release_id="$(awk -F': *' '/^release-id:/{print $2}' "$DIGITALIS_WORK/dist/digitalis-prebuilts/MANIFEST.txt")"
+          echo "release_id=$release_id" >> "$GITHUB_OUTPUT"
 
       - name: Verify packaged bundle
         run: |
@@ -296,7 +301,7 @@ jobs:
       - name: Upload prebuilt bundle artifact
         uses: actions/upload-artifact@v4
         with:
-          name: digitalis-prebuilts-${{ matrix.android }}
+          name: digitalis-prebuilts-${{ steps.pkg.outputs.release_id }}
           path: |
             ${{ env.DIGITALIS_WORK }}/dist/digitalis-prebuilts-*.tar.gz
             ${{ env.DIGITALIS_WORK }}/dist/digitalis-prebuilts-*.tar.gz.sha256
@@ -322,16 +327,18 @@ jobs:
           retention-days: 30
 
   release:
-    name: Publish GitHub Release
+    name: Publish GitHub Releases (one per branch)
     needs: [plan, build]
     if: needs.plan.outputs.should_build == 'true' && needs.plan.outputs.should_release == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
       contents: write
+    outputs:
+      release_urls: ${{ steps.publish.outputs.release_urls }}
     env:
       GH_TOKEN: ${{ github.token }}
-      RELEASE_TAG: ${{ needs.plan.outputs.release_tag }}
+      CUSTOM_TAG: ${{ needs.plan.outputs.release_tag }}
     steps:
       - uses: actions/checkout@v4
 
@@ -341,57 +348,69 @@ jobs:
           pattern: digitalis-prebuilts-*
           path: release-artifacts
 
-      - name: Verify checksums and compose release notes
+      - name: Verify checksums and publish one GitHub Release per branch
+        id: publish
         run: |
-          mkdir -p release-assets
-          {
-            echo "# Digitalis Prebuilts (${RELEASE_TAG})"
-            echo ""
-            echo "Binary-only ARM64-to-x86_64 Digitalis translator bundles built via unbundled AOSP Soong CI and verified with host tests."
-            echo ""
-          } > release-notes.md
+          shopt -s nullglob
+          dirs=(release-artifacts/digitalis-prebuilts-*)
+          if (( ${#dirs[@]} == 0 )); then
+            echo "::error::no prebuilt artifacts found to release"
+            exit 1
+          fi
 
-          for dir in release-artifacts/digitalis-prebuilts-*; do
+          release_urls=()
+          for dir in "${dirs[@]}"; do
             [[ -d "$dir" ]] || continue
             (
               cd "$dir"
               sha256sum -c -- *.tar.gz.sha256
             )
-            cp "$dir"/*.tar.gz "$dir"/*.tar.gz.sha256 release-assets/
+            release_id="$(awk -F': *' '/^release-id:/{print $2}' "$dir/MANIFEST.txt")"
+            branch="$(awk -F': *' '/^branch:/{print $2}' "$dir/MANIFEST.txt")"
             android="$(awk -F': *' '/^android-release:/{print $2}' "$dir/MANIFEST.txt")"
+            build_date="$(awk -F': *' '/^build-date:/{print $2}' "$dir/MANIFEST.txt")"
             bt_sha="$(awk -F': *' '/^binary_translation-sha:/{print $2}' "$dir/MANIFEST.txt")"
             dig_sha="$(awk -F': *' '/^digitalis-sha:/{print $2}' "$dir/MANIFEST.txt")"
+            manifest_sha="$(awk -F': *' '/^manifest-sha:/{print $2}' "$dir/MANIFEST.txt")"
             count="$(awk -F': *' '/^artifact-count:/{print $2}' "$dir/MANIFEST.txt")"
             tar_files=("$dir"/*.tar.gz)
             tar_name="$(basename "${tar_files[0]}")"
-            {
-              echo "## ${android}"
-              echo ""
-              echo "- Archive: \`${tar_name}\`"
-              echo "- \`binary_translation\`: \`${bt_sha}\`"
-              echo "- \`digitalis\`: \`${dig_sha}\`"
-              echo "- Artifacts: ${count}"
-              echo ""
-            } >> release-notes.md
+
+            tag="$release_id"
+            if [[ -n "$CUSTOM_TAG" && ${#dirs[@]} -eq 1 ]]; then
+              tag="$CUSTOM_TAG"
+            fi
+
+            notes_file="${dir}/release-notes.md"
+            cat > "$notes_file" <<EOF
+          # Digitalis Prebuilts (${tag})
+
+          Binary-only ARM64-to-x86_64 Digitalis translator bundle for **${android}**, built via unbundled AOSP Soong CI and verified with host tests.
+
+          - **Branch:** \`${branch}\`
+          - **Build date:** \`${build_date}\`
+          - **Archive:** \`${tar_name}\`
+          - **\`binary_translation\`:** \`${bt_sha}\`
+          - **\`digitalis\`:** \`${dig_sha}\`
+          - **\`manifest\`:** \`${manifest_sha}\`
+          - **Artifacts:** ${count}
+          EOF
+
+            if gh release view "$tag" >/dev/null 2>&1; then
+              gh release upload "$tag" \
+                "$dir"/*.tar.gz "$dir"/*.tar.gz.sha256 "$dir/MANIFEST.txt" "$dir/SOURCES.json" \
+                --clobber
+              gh release edit "$tag" --notes-file "$notes_file"
+            else
+              gh release create "$tag" \
+                "$dir"/*.tar.gz "$dir"/*.tar.gz.sha256 "$dir/MANIFEST.txt" "$dir/SOURCES.json" \
+                --title "Digitalis Prebuilts ${tag}" \
+                --notes-file "$notes_file"
+            fi
+            release_urls+=("${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/releases/tag/${tag}")
           done
 
-          (
-            cd release-assets
-            sha256sum -- *.tar.gz > SHA256SUMS
-          )
-          cat release-notes.md
-
-      - name: Create or update GitHub Release
-        run: |
-          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
-            gh release upload "$RELEASE_TAG" release-assets/* --clobber
-            gh release edit "$RELEASE_TAG" --notes-file release-notes.md
-          else
-            gh release create "$RELEASE_TAG" \
-              release-assets/* \
-              --title "Digitalis Prebuilts ${RELEASE_TAG}" \
-              --notes-file release-notes.md
-          fi
+          printf 'release_urls=%s\n' "$(IFS=,; echo "${release_urls[*]}")" >> "$GITHUB_OUTPUT"
 
   notify-issue:
     name: Report status to triggering issue
@@ -406,17 +425,21 @@ jobs:
       ISSUE_NUMBER: ${{ needs.plan.outputs.issue_number }}
       BUILD_RESULT: ${{ needs.build.result }}
       RELEASE_RESULT: ${{ needs.release.result }}
-      RELEASE_TAG: ${{ needs.plan.outputs.release_tag }}
+      RELEASE_URLS: ${{ needs.release.outputs.release_urls }}
     steps:
       - name: Post final status comment
         run: |
           run_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
-          body="Prebuilt build finished: **build=${BUILD_RESULT}**"
-          if [[ "$RELEASE_RESULT" != "skipped" ]]; then
-            body="${body}, **release=${RELEASE_RESULT}**"
-          fi
-          body="${body}\n\n- Workflow run & artifacts: ${run_url}"
-          if [[ "$RELEASE_RESULT" == "success" && -n "$RELEASE_TAG" ]]; then
-            body="${body}\n- Release: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/releases/tag/${RELEASE_TAG}"
-          fi
-          printf '%b\n' "$body" | gh issue comment "$ISSUE_NUMBER" --body-file -
+          {
+            printf 'Prebuilt build finished: **build=%s**' "$BUILD_RESULT"
+            if [[ "$RELEASE_RESULT" != "skipped" ]]; then
+              printf ', **release=%s**' "$RELEASE_RESULT"
+            fi
+            printf '\n\n- Workflow run & artifacts: %s\n' "$run_url"
+            if [[ "$RELEASE_RESULT" == "success" && -n "$RELEASE_URLS" ]]; then
+              IFS=, read -ra urls <<<"$RELEASE_URLS"
+              for u in "${urls[@]}"; do
+                printf -- '- Release: %s\n' "$u"
+              done
+            fi
+          } | gh issue comment "$ISSUE_NUMBER" --body-file -

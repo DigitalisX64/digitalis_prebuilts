@@ -125,6 +125,7 @@ class PackagingAndVerificationTests(unittest.TestCase):
 
             sources = tmp / "sources.json"
             sources.write_text(json.dumps({
+                "manifest": {"commit": "9cd17507" + "0" * 32},
                 "projects": {
                     "frameworks/libs/binary_translation": {"commit": "5d66dd11" + "0" * 32},
                     "digitalis": {"commit": "8ca2d135" + "0" * 32},
@@ -145,6 +146,9 @@ class PackagingAndVerificationTests(unittest.TestCase):
             )
             self.assertEqual(tarball.name, "digitalis-prebuilts-android17-2026-11-22-5d66dd11.tar.gz")
             self.assertTrue(sha_path.is_file())
+            manifest_text = (bundle_dir / "MANIFEST.txt").read_text(encoding="utf-8")
+            self.assertIn("release-id:             android17-2026-11-22-5d66dd11", manifest_text)
+            self.assertIn("manifest-sha:           9cd17507", manifest_text)
             errors, count = verify_bundle.verify_bundle_dir(bundle_dir, mk, check_symbols=False)
             self.assertEqual(errors, [])
             self.assertEqual(count, 8)
@@ -152,6 +156,19 @@ class PackagingAndVerificationTests(unittest.TestCase):
                 verify_bundle.main([str(tarball), "--config-mk", str(mk), "--skip-symbols"]),
                 0,
             )
+
+    def test_branch_label_formatting(self):
+        self.assertEqual(package_bundle.build_branch_label("android17", ""), "android17")
+        self.assertEqual(package_bundle.build_branch_label("android17", "android17"), "android17")
+        self.assertEqual(package_bundle.build_branch_label("android17", "5d66dd11" * 5), "android17")
+        self.assertEqual(
+            package_bundle.build_branch_label("android17", "fix/guest-error"),
+            "android17-fix-guest-error",
+        )
+        self.assertEqual(
+            package_bundle.build_branch_label("android17", "android17-dev"),
+            "android17-dev",
+        )
 
     def test_target_files_symlink_and_apex_extraction(self):
         with tempfile.TemporaryDirectory() as tmp:

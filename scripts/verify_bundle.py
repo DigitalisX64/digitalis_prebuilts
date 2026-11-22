@@ -125,7 +125,16 @@ def verify_bundle_dir(bundle_dir, config_mk, tree_top=None, check_symbols=True):
         fail("MANIFEST.txt missing")
     else:
         manifest_text = manifest_file.read_text(encoding="utf-8")
-        for key in ("android-release:", "build-date:", "build-username:", "binary_translation-sha:", "artifact-count:"):
+        for key in (
+            "release-id:",
+            "branch:",
+            "android-release:",
+            "build-date:",
+            "build-username:",
+            "binary_translation-sha:",
+            "manifest-sha:",
+            "artifact-count:",
+        ):
             if key not in manifest_text:
                 fail(f"MANIFEST.txt missing {key}")
 

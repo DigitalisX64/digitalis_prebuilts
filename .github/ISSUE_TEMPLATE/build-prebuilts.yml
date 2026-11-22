@@ -40,5 +40,5 @@ body:
     id: release_tag
     attributes:
       label: Release tag (optional)
-      description: Tag name when publishing a release (defaults to prebuilts-YYYY-MM-DD).
-      placeholder: v2026.11.22
+      description: Custom tag for a single-branch release. Leave blank to use <branch>-<YYYY-MM-DD>-<bt_sha> per branch (e.g. android17-2026-11-22-5d66dd11).
+      placeholder: android17-2026-11-22-5d66dd11

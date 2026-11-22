@@ -7,9 +7,11 @@ standard GitHub-hosted `ubuntu-24.04` runners.
 
 ## Downloading prebuilts
 
-Download `digitalis-prebuilts-android17-<date>-<sha>.tar.gz` or
-`digitalis-prebuilts-android16-<date>-<sha>.tar.gz` (plus its `.sha256`) from
-the [Releases](../../releases) page.
+Each built branch publishes its own GitHub Release tagged
+`<branch>-<YYYY-MM-DD>-<bt_sha>` (for example `android17-2026-11-22-5d66dd11` or
+`android16-2026-11-22-246557a3`) containing
+`digitalis-prebuilts-<branch>-<YYYY-MM-DD>-<bt_sha>.tar.gz`, its `.sha256`,
+`MANIFEST.txt`, and `SOURCES.json` on the [Releases](../../releases) page.
 
 Each archive unpacks to `digitalis-prebuilts/` containing:
 
@@ -83,9 +85,12 @@ unbundled Soong-only build (`SOONG_ONLY=true`, `TARGET_BUILD_UNBUNDLED=true`,
   on the issue, and reports completion status when done.
 - **Manual run (workflow artifact only):** run **Actions → Build Digitalis Prebuilts → Run workflow**
   (choose `all`, `android17`, or `android16`, plus optional `bt_ref` / `use_branch_head`).
-- **Manual run + GitHub Release:** set `publish_release: true` (and optional `release_tag`).
-- **Tagged release:** push a `v*` tag (for example `git tag v2026.11.22 && git push origin v2026.11.22`)
-  to build both `android16` and `android17` and publish the GitHub Release automatically.
+- **Manual run + GitHub Release:** set `publish_release: true` to publish one
+  GitHub Release per branch (`<branch>-<YYYY-MM-DD>-<bt_sha>`, or an explicit
+  `release_tag` for single-branch runs).
+- **Tagged trigger:** push a `v*` tag (for example `git tag v2026.11.22 && git push origin v2026.11.22`)
+  to build both `android16` and `android17` and publish each branch's Release
+  (`android17-<YYYY-MM-DD>-<bt_sha>` and `android16-<YYYY-MM-DD>-<bt_sha>`).
 
 ## Updating pinned commits
 
