@@ -1,0 +1,299 @@
+name: Build Digitalis Prebuilts
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      android:
+        description: "Android target to build"
+        type: choice
+        default: "all"
+        options:
+          - all
+          - android17
+          - android16
+      publish_release:
+        description: "Publish a GitHub Release with the packaged tarballs"
+        type: boolean
+        default: false
+      release_tag:
+        description: "Release tag when publish_release is true (defaults to prebuilts-YYYY-MM-DD)"
+        type: string
+        required: false
+        default: ""
+
+concurrency:
+  group: build-prebuilts-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  plan:
+    name: Plan build matrix
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      android_matrix: ${{ steps.plan.outputs.android_matrix }}
+      build_date: ${{ steps.plan.outputs.build_date }}
+      should_release: ${{ steps.plan.outputs.should_release }}
+      release_tag: ${{ steps.plan.outputs.release_tag }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate lockfile and resolve matrix
+        id: plan
+        env:
+          INPUT_ANDROID: ${{ inputs.android }}
+          INPUT_PUBLISH: ${{ inputs.publish_release }}
+          INPUT_TAG: ${{ inputs.release_tag }}
+        run: |
+          python3 scripts/lock.py check
+          all_versions="$(python3 scripts/lock.py versions)"
+          if [[ -n "$INPUT_ANDROID" && "$INPUT_ANDROID" != "all" ]]; then
+            echo "$all_versions" | jq -e --arg v "$INPUT_ANDROID" 'index($v) != null' >/dev/null \
+              || { echo "::error::version $INPUT_ANDROID not in config/versions.json"; exit 1; }
+            matrix="$(jq -cn --arg v "$INPUT_ANDROID" '[$v]')"
+          else
+            matrix="$all_versions"
+          fi
+          build_date="$(date -u +%Y-%m-%d)"
+          should_release="false"
+          release_tag=""
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            should_release="true"
+            release_tag="${GITHUB_REF_NAME}"
+          elif [[ "$INPUT_PUBLISH" == "true" ]]; then
+            should_release="true"
+            release_tag="${INPUT_TAG:-prebuilts-${build_date}}"
+          fi
+          echo "android_matrix=$matrix" >> "$GITHUB_OUTPUT"
+          echo "build_date=$build_date" >> "$GITHUB_OUTPUT"
+          echo "should_release=$should_release" >> "$GITHUB_OUTPUT"
+          echo "release_tag=$release_tag" >> "$GITHUB_OUTPUT"
+          echo "matrix=$matrix build_date=$build_date should_release=$should_release release_tag=$release_tag"
+
+  build:
+    name: Build (${{ matrix.android }})
+    needs: plan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 355
+    permissions:
+      contents: read
+      actions: write
+    strategy:
+      fail-fast: false
+      matrix:
+        android: ${{ fromJSON(needs.plan.outputs.android_matrix) }}
+    env:
+      ANDROID_BRANCH: ${{ matrix.android }}
+      BUILD_DATE: ${{ needs.plan.outputs.build_date }}
+      CCACHE_DIR: /tmp/digitalis-ccache
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Free runner disk and add swap
+        run: scripts/free-runner-disk.sh "digitalis-${ANDROID_BRANCH}"
+
+      - name: Install build tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends \
+            binutils ccache e2fsprogs erofs-utils jq
+          ccache --version | head -n 1
+
+      - name: Read version metadata
+        id: meta
+        run: |
+          info="$(python3 scripts/lock.py info "$ANDROID_BRANCH")"
+          echo "bt_short=$(jq -r .bt_short <<<"$info")" >> "$GITHUB_OUTPUT"
+          echo "digitalis_short=$(jq -r .digitalis_short <<<"$info")" >> "$GITHUB_OUTPUT"
+          echo "api=$(jq -r .api <<<"$info")" >> "$GITHUB_OUTPUT"
+          echo "$info"
+
+      - name: Restore ccache
+        uses: actions/cache/restore@v4
+        with:
+          path: /tmp/digitalis-ccache
+          key: digitalis-ccache-${{ matrix.android }}-${{ hashFiles('config/versions.json') }}-${{ github.run_id }}
+          restore-keys: |
+            digitalis-ccache-${{ matrix.android }}-${{ hashFiles('config/versions.json') }}-
+            digitalis-ccache-${{ matrix.android }}-
+
+      - name: Fetch pinned AOSP framework and unproxied guest libraries
+        run: |
+          python3 scripts/fetch_aosp_libs.py \
+            --android "$ANDROID_BRANCH" \
+            --framework-out "$DIGITALIS_WORK/framework-libs" \
+            --guest-out "$DIGITALIS_WORK/guest-libs" \
+            --work-dir "$DIGITALIS_WORK"
+          ls -lh "$DIGITALIS_WORK/framework-libs" "$DIGITALIS_WORK/guest-libs"
+
+      - name: Fetch reduced AOSP and Digitalis source tree
+        run: |
+          start=$SECONDS
+          python3 scripts/fetch_source.py \
+            --android "$ANDROID_BRANCH" \
+            --top "$DIGITALIS_WORK/aosp" \
+            --jobs 8
+          echo "fetched in $(( (SECONDS - start) / 60 ))m $(( (SECONDS - start) % 60 ))s"
+          du -sh "$DIGITALIS_WORK/aosp"
+          df -h / /mnt 2>/dev/null || df -h /
+
+      - name: Build translator prebuilts and host tests
+        timeout-minutes: 290
+        run: |
+          start=$SECONDS
+          scripts/build.sh "$DIGITALIS_WORK/aosp" "$DIGITALIS_WORK/framework-libs"
+          echo "built in $(( (SECONDS - start) / 60 ))m $(( (SECONDS - start) % 60 ))s"
+          du -sh "$DIGITALIS_WORK/aosp/out"
+          df -h / /mnt 2>/dev/null || df -h /
+
+      - name: Save ccache
+        if: always() && steps.meta.outcome == 'success'
+        uses: actions/cache/save@v4
+        with:
+          path: /tmp/digitalis-ccache
+          key: digitalis-ccache-${{ matrix.android }}-${{ hashFiles('config/versions.json') }}-${{ github.run_id }}
+
+      - name: Prune superseded caches
+        if: always() && steps.meta.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          scripts/prune-caches.sh \
+            "$GITHUB_REF" \
+            "digitalis-ccache-${ANDROID_BRANCH}-" \
+            "digitalis-ccache-${ANDROID_BRANCH}-${{ hashFiles('config/versions.json') }}-${GITHUB_RUN_ID}"
+
+      - name: Package canonical Digitalis prebuilt bundle
+        run: |
+          python3 scripts/package_bundle.py package \
+            --config-mk "$DIGITALIS_WORK/aosp/frameworks/libs/binary_translation/berberis_config.mk" \
+            --product-out "$DIGITALIS_WORK/aosp/out/target/product/digitalis_prebuilts" \
+            --guest-libs "$DIGITALIS_WORK/guest-libs" \
+            --out "$DIGITALIS_WORK/dist" \
+            --android "$ANDROID_BRANCH" \
+            --date "$BUILD_DATE" \
+            --username "digitalis-ci" \
+            --sources "$DIGITALIS_WORK/aosp/.digitalis-sources.json" \
+            --license "$DIGITALIS_WORK/aosp/digitalis/LICENSE"
+          ls -lh "$DIGITALIS_WORK/dist"
+          cat "$DIGITALIS_WORK/dist/digitalis-prebuilts/MANIFEST.txt"
+
+      - name: Verify packaged bundle
+        run: |
+          tarball="$(ls "$DIGITALIS_WORK"/dist/digitalis-prebuilts-*.tar.gz)"
+          python3 scripts/verify_bundle.py "$tarball" \
+            --config-mk "$DIGITALIS_WORK/aosp/frameworks/libs/binary_translation/berberis_config.mk" \
+            --top "$DIGITALIS_WORK/aosp"
+          if [[ -x "$DIGITALIS_WORK/aosp/digitalis/scripts/verify-digitalis-prebuilts.sh" ]]; then
+            ANDROID_BUILD_TOP="$DIGITALIS_WORK/aosp" \
+              "$DIGITALIS_WORK/aosp/digitalis/scripts/verify-digitalis-prebuilts.sh" \
+              "$DIGITALIS_WORK/dist/digitalis-prebuilts"
+          fi
+
+      - name: Run host tests
+        run: scripts/run-host-tests.sh "$DIGITALIS_WORK/aosp" "$DIGITALIS_WORK/reports"
+
+      - name: Upload prebuilt bundle artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: digitalis-prebuilts-${{ matrix.android }}
+          path: |
+            ${{ env.DIGITALIS_WORK }}/dist/digitalis-prebuilts-*.tar.gz
+            ${{ env.DIGITALIS_WORK }}/dist/digitalis-prebuilts-*.tar.gz.sha256
+            ${{ env.DIGITALIS_WORK }}/dist/digitalis-prebuilts/MANIFEST.txt
+            ${{ env.DIGITALIS_WORK }}/dist/digitalis-prebuilts/SOURCES.json
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Upload build logs and test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-logs-${{ matrix.android }}
+          path: |
+            ${{ env.DIGITALIS_WORK }}/aosp/out/error.log
+            ${{ env.DIGITALIS_WORK }}/aosp/out/soong.log
+            ${{ env.DIGITALIS_WORK }}/aosp/out/missing-inputs.txt
+            ${{ env.DIGITALIS_WORK }}/aosp/.digitalis-targets
+            ${{ env.DIGITALIS_WORK }}/aosp/.digitalis-sources.json
+            ${{ env.DIGITALIS_WORK }}/reports/
+          if-no-files-found: ignore
+          include-hidden-files: true
+          retention-days: 30
+
+  release:
+    name: Publish GitHub Release
+    needs: [plan, build]
+    if: needs.plan.outputs.should_release == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_TAG: ${{ needs.plan.outputs.release_tag }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download prebuilt artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: digitalis-prebuilts-*
+          path: release-artifacts
+
+      - name: Verify checksums and compose release notes
+        run: |
+          mkdir -p release-assets
+          {
+            echo "# Digitalis Prebuilts (${RELEASE_TAG})"
+            echo ""
+            echo "Binary-only ARM64-to-x86_64 Digitalis translator bundles built via unbundled AOSP Soong CI and verified with host tests."
+            echo ""
+          } > release-notes.md
+
+          for dir in release-artifacts/digitalis-prebuilts-*; do
+            [[ -d "$dir" ]] || continue
+            (
+              cd "$dir"
+              sha256sum -c -- *.tar.gz.sha256
+            )
+            cp "$dir"/*.tar.gz "$dir"/*.tar.gz.sha256 release-assets/
+            android="$(awk -F': *' '/^android-release:/{print $2}' "$dir/MANIFEST.txt")"
+            bt_sha="$(awk -F': *' '/^binary_translation-sha:/{print $2}' "$dir/MANIFEST.txt")"
+            dig_sha="$(awk -F': *' '/^digitalis-sha:/{print $2}' "$dir/MANIFEST.txt")"
+            count="$(awk -F': *' '/^artifact-count:/{print $2}' "$dir/MANIFEST.txt")"
+            tar_name="$(basename "$(ls "$dir"/*.tar.gz)")"
+            {
+              echo "## ${android}"
+              echo ""
+              echo "- Archive: \`${tar_name}\`"
+              echo "- \`binary_translation\`: \`${bt_sha}\`"
+              echo "- \`digitalis\`: \`${dig_sha}\`"
+              echo "- Artifacts: ${count}"
+              echo ""
+            } >> release-notes.md
+          done
+
+          (
+            cd release-assets
+            sha256sum -- *.tar.gz > SHA256SUMS
+          )
+          cat release-notes.md
+
+      - name: Create or update GitHub Release
+        run: |
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" release-assets/* --clobber
+            gh release edit "$RELEASE_TAG" --notes-file release-notes.md
+          else
+            gh release create "$RELEASE_TAG" \
+              release-assets/* \
+              --title "Digitalis Prebuilts ${RELEASE_TAG}" \
+              --notes-file release-notes.md
+          fi

@@ -1,0 +1,188 @@
+/*
+ * Copyright (C) 2026 utzcoz
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+// Prebuilt x86_64 AOSP framework libraries that libberberis_proxy_* link
+// against. Populated under x86_64/ by scripts/fetch-aosp-libs.py from the
+// pinned AOSP x86_64 target_files archive for the matching Android release.
+
+package {
+    default_applicable_licenses: ["Android-Apache-2.0"],
+}
+
+cc_defaults {
+    name: "digitalis_framework_prebuilt_defaults",
+    compile_multilib: "64",
+    installable: false,
+    strip: {
+        none: true,
+    },
+    system_shared_libs: [],
+    stl: "none",
+    header_libs: ["digitalis_framework_headers"],
+    export_header_lib_headers: ["digitalis_framework_headers"],
+}
+
+cc_prebuilt_library_shared {
+    name: "libEGL",
+    defaults: ["digitalis_framework_prebuilt_defaults"],
+    prefer: true,
+    check_elf_files: false,
+    srcs: ["x86_64/libEGL.so"],
+}
+
+cc_prebuilt_library_shared {
+    name: "libGLESv1_CM",
+    defaults: ["digitalis_framework_prebuilt_defaults"],
+    prefer: true,
+    check_elf_files: false,
+    srcs: ["x86_64/libGLESv1_CM.so"],
+}
+
+cc_prebuilt_library_shared {
+    name: "libGLESv2",
+    defaults: ["digitalis_framework_prebuilt_defaults"],
+    prefer: true,
+    check_elf_files: false,
+    srcs: ["x86_64/libGLESv2.so"],
+}
+
+cc_prebuilt_library_shared {
+    name: "libGLESv3",
+    defaults: ["digitalis_framework_prebuilt_defaults"],
+    prefer: true,
+    check_elf_files: false,
+    srcs: ["x86_64/libGLESv3.so"],
+}
+
+cc_prebuilt_library_shared {
+    name: "libOpenMAXAL",
+    defaults: ["digitalis_framework_prebuilt_defaults"],
+    prefer: true,
+    check_elf_files: false,
+    srcs: ["x86_64/libOpenMAXAL.so"],
+}
+
+cc_prebuilt_library_shared {
+    name: "libOpenSLES",
+    defaults: ["digitalis_framework_prebuilt_defaults"],
+    prefer: true,
+    check_elf_files: false,
+    srcs: ["x86_64/libOpenSLES.so"],
+}
+
+cc_prebuilt_library_shared {
+    name: "libaaudio",
+    defaults: ["digitalis_framework_prebuilt_defaults"],
+    prefer: true,
+    check_elf_files: false,
+    srcs: ["x86_64/libaaudio.so"],
+}
+
+cc_prebuilt_library_shared {
+    name: "libamidi",
+    defaults: ["digitalis_framework_prebuilt_defaults"],
+    prefer: true,
+    check_elf_files: false,
+    srcs: ["x86_64/libamidi.so"],
+}
+
+cc_prebuilt_library_shared {
+    name: "libandroid",
+    defaults: ["digitalis_framework_prebuilt_defaults"],
+    prefer: true,
+    check_elf_files: false,
+    srcs: ["x86_64/libandroid.so"],
+}
+
+cc_prebuilt_library_shared {
+    name: "libandroid_runtime",
+    defaults: ["digitalis_framework_prebuilt_defaults"],
+    prefer: true,
+    check_elf_files: false,
+    srcs: ["x86_64/libandroid_runtime.so"],
+}
+
+cc_prebuilt_library_shared {
+    name: "libbinder_ndk",
+    defaults: ["digitalis_framework_prebuilt_defaults"],
+    prefer: true,
+    check_elf_files: false,
+    srcs: ["x86_64/libbinder_ndk.so"],
+}
+
+cc_prebuilt_library_shared {
+    name: "libcamera2ndk",
+    defaults: ["digitalis_framework_prebuilt_defaults"],
+    prefer: true,
+    check_elf_files: false,
+    srcs: ["x86_64/libcamera2ndk.so"],
+}
+
+cc_prebuilt_library_shared {
+    name: "libjnigraphics",
+    defaults: ["digitalis_framework_prebuilt_defaults"],
+    prefer: true,
+    check_elf_files: false,
+    srcs: ["x86_64/libjnigraphics.so"],
+}
+
+cc_prebuilt_library_shared {
+    name: "libmediandk",
+    defaults: ["digitalis_framework_prebuilt_defaults"],
+    prefer: true,
+    check_elf_files: false,
+    srcs: ["x86_64/libmediandk.so"],
+}
+
+cc_prebuilt_library_shared {
+    name: "libnativehelper",
+    defaults: ["digitalis_framework_prebuilt_defaults"],
+    prefer: true,
+    check_elf_files: false,
+    srcs: ["x86_64/libnativehelper.so"],
+}
+
+cc_prebuilt_library_shared {
+    name: "libnativewindow",
+    defaults: ["digitalis_framework_prebuilt_defaults"],
+    prefer: true,
+    check_elf_files: false,
+    srcs: ["x86_64/libnativewindow.so"],
+}
+
+cc_prebuilt_library_shared {
+    name: "libneuralnetworks",
+    defaults: ["digitalis_framework_prebuilt_defaults"],
+    prefer: true,
+    check_elf_files: false,
+    srcs: ["x86_64/libneuralnetworks.so"],
+}
+
+cc_prebuilt_library_shared {
+    name: "libvulkan",
+    defaults: ["digitalis_framework_prebuilt_defaults"],
+    prefer: true,
+    check_elf_files: false,
+    srcs: ["x86_64/libvulkan.so"],
+}
+
+cc_prebuilt_library_shared {
+    name: "libwebviewchromium_plat_support",
+    defaults: ["digitalis_framework_prebuilt_defaults"],
+    prefer: true,
+    check_elf_files: false,
+    srcs: ["x86_64/libwebviewchromium_plat_support.so"],
+}

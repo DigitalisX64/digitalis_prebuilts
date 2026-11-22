@@ -1,0 +1,35 @@
+/*
+ * Copyright (C) 2026 utzcoz
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+// Minimal stub host modules required by Soong's python_binary_host graph.
+// None of the translator's Python build helpers link libsqlite or compile
+// .proto files; stubbing them avoids pulling external/sqlite, host ICU,
+// external/protobuf, and abseil into the reduced tree.
+
+package {
+    default_applicable_licenses: ["Android-Apache-2.0"],
+}
+
+cc_library_host_shared {
+    name: "libsqlite",
+    srcs: ["empty.c"],
+    stl: "none",
+}
+
+sh_binary_host {
+    name: "aprotoc",
+    src: "aprotoc.sh",
+}
