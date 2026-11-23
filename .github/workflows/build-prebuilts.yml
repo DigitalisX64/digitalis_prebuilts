@@ -122,7 +122,7 @@ jobs:
                   rel_suffix=" (\`<branch>-${build_date}-<sha>\` per branch)"
                 fi
               fi
-              gh issue comment "$issue_number" --body-file - <<EOF
+              gh issue comment "$issue_number" --repo "$GITHUB_REPOSITORY" --body-file - <<EOF
           Triggered prebuilt build from this issue:
           - **Targets:** \`${targets_csv}\`
           - **Translator ref:** \`${ref_note}\`
@@ -257,12 +257,16 @@ jobs:
             --sources "$DIGITALIS_WORK/aosp/.digitalis-sources.json" \
             --license "$DIGITALIS_WORK/aosp/digitalis/LICENSE" \
             --bt-ref "$BT_REF"
-          cp "$DIGITALIS_WORK/dist/digitalis-prebuilts/MANIFEST.txt" \
+          rm -rf "$DIGITALIS_WORK/release-bundle"
+          mkdir -p "$DIGITALIS_WORK/release-bundle"
+          cp "$DIGITALIS_WORK"/dist/digitalis-prebuilts-*.tar.gz \
+             "$DIGITALIS_WORK"/dist/digitalis-prebuilts-*.tar.gz.sha256 \
+             "$DIGITALIS_WORK/dist/digitalis-prebuilts/MANIFEST.txt" \
              "$DIGITALIS_WORK/dist/digitalis-prebuilts/SOURCES.json" \
-             "$DIGITALIS_WORK/dist/"
-          ls -lh "$DIGITALIS_WORK/dist"
-          cat "$DIGITALIS_WORK/dist/MANIFEST.txt"
-          release_id="$(awk -F': *' '/^release-id:/{print $2}' "$DIGITALIS_WORK/dist/MANIFEST.txt")"
+             "$DIGITALIS_WORK/release-bundle/"
+          ls -lh "$DIGITALIS_WORK/release-bundle"
+          cat "$DIGITALIS_WORK/release-bundle/MANIFEST.txt"
+          release_id="$(awk -F': *' '/^release-id:/{print $2}' "$DIGITALIS_WORK/release-bundle/MANIFEST.txt")"
           echo "release_id=$release_id" >> "$GITHUB_OUTPUT"
 
       - name: Verify packaged bundle
@@ -284,11 +288,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: digitalis-prebuilts-${{ steps.pkg.outputs.release_id }}
-          path: |
-            ${{ env.DIGITALIS_WORK }}/dist/digitalis-prebuilts-*.tar.gz
-            ${{ env.DIGITALIS_WORK }}/dist/digitalis-prebuilts-*.tar.gz.sha256
-            ${{ env.DIGITALIS_WORK }}/dist/MANIFEST.txt
-            ${{ env.DIGITALIS_WORK }}/dist/SOURCES.json
+          path: ${{ env.DIGITALIS_WORK }}/release-bundle
           if-no-files-found: error
           retention-days: ${{ needs.plan.outputs.should_release == 'true' && 1 || 7 }}
 
@@ -335,56 +335,80 @@ jobs:
         id: publish
         run: |
           shopt -s nullglob
-          dirs=()
-          for m in release-artifacts/MANIFEST.txt release-artifacts/*/MANIFEST.txt; do
-            dirs+=("$(dirname "$m")")
-          done
-          if (( ${#dirs[@]} == 0 )); then
-            echo "::error::no prebuilt artifacts found to release"
+          echo "::group::Downloaded release artifacts"
+          find release-artifacts -maxdepth 4 -ls || true
+          echo "::endgroup::"
+
+          mapfile -t sha_paths < <(find release-artifacts -type f -name '*.tar.gz.sha256' | sort)
+          if (( ${#sha_paths[@]} == 0 )); then
+            echo "::error::no .tar.gz.sha256 files found under release-artifacts/"
             exit 1
           fi
 
           release_urls=()
           summary_files=()
-          for dir in "${dirs[@]}"; do
-            [[ -d "$dir" ]] || continue
+          for sha_path in "${sha_paths[@]}"; do
+            dir="$(dirname "$sha_path")"
+            sha_name="$(basename "$sha_path")"
+            tar_name="${sha_name%.sha256}"
+            tar_path="${dir}/${tar_name}"
+            if [[ ! -f "$tar_path" ]]; then
+              echo "::error::missing tarball ${tar_path} referenced by ${sha_path}"
+              exit 1
+            fi
             (
               cd "$dir"
-              sha256sum -c -- *.tar.gz.sha256
+              sha256sum -c -- "$sha_name"
             )
-            release_id="$(awk -F': *' '/^release-id:/{print $2}' "$dir/MANIFEST.txt")"
-            tar_files=("$dir"/*.tar.gz)
-            tar_path="${tar_files[0]}"
-            tar_name="$(basename "$tar_path")"
-            sha_path="${tar_path}.sha256"
 
+            manifest_path="$dir/MANIFEST.txt"
+            sources_path="$dir/SOURCES.json"
+            if [[ ! -f "$manifest_path" && -f "$dir/digitalis-prebuilts/MANIFEST.txt" ]]; then
+              manifest_path="$dir/digitalis-prebuilts/MANIFEST.txt"
+            fi
+            if [[ ! -f "$sources_path" && -f "$dir/digitalis-prebuilts/SOURCES.json" ]]; then
+              sources_path="$dir/digitalis-prebuilts/SOURCES.json"
+            fi
+            if [[ ! -f "$manifest_path" ]]; then
+              echo "::error::missing MANIFEST.txt alongside ${tar_path}"
+              exit 1
+            fi
+
+            release_id="$(awk -F': *' '/^release-id:/{print $2}' "$manifest_path")"
             tag="$release_id"
-            if [[ -n "$CUSTOM_TAG" && ${#dirs[@]} -eq 1 ]]; then
+            if [[ -n "$CUSTOM_TAG" && ${#sha_paths[@]} -eq 1 ]]; then
               tag="$CUSTOM_TAG"
             fi
 
             notes_file="${dir}/release-notes.md"
             summary_file="${dir}/release-summary.json"
+            sources_args=()
+            upload_files=("$tar_path" "$sha_path" "$manifest_path")
+            if [[ -f "$sources_path" ]]; then
+              sources_args+=(--sources "$sources_path")
+              upload_files+=("$sources_path")
+            fi
+
             python3 scripts/generate_release_notes.py \
               --tag "$tag" \
               --tarball-name "$tar_name" \
               --tarball "$tar_path" \
               --sha256-file "$sha_path" \
-              --manifest "$dir/MANIFEST.txt" \
-              --sources "$dir/SOURCES.json" \
+              --manifest "$manifest_path" \
+              "${sources_args[@]}" \
               --repo "$GITHUB_REPOSITORY" \
               --summary-json "$summary_file" \
               --output "$notes_file"
             cat "$notes_file"
 
-            if gh release view "$tag" >/dev/null 2>&1; then
-              gh release upload "$tag" \
-                "$dir"/*.tar.gz "$dir"/*.tar.gz.sha256 "$dir/MANIFEST.txt" "$dir/SOURCES.json" \
+            if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+              gh release upload "$tag" --repo "$GITHUB_REPOSITORY" \
+                "${upload_files[@]}" \
                 --clobber
-              gh release edit "$tag" --notes-file "$notes_file"
+              gh release edit "$tag" --repo "$GITHUB_REPOSITORY" --notes-file "$notes_file"
             else
-              gh release create "$tag" \
-                "$dir"/*.tar.gz "$dir"/*.tar.gz.sha256 "$dir/MANIFEST.txt" "$dir/SOURCES.json" \
+              gh release create "$tag" --repo "$GITHUB_REPOSITORY" \
+                "${upload_files[@]}" \
                 --title "Digitalis Prebuilts ${tag}" \
                 --notes-file "$notes_file"
             fi
@@ -441,7 +465,7 @@ jobs:
             "${close_args[@]}" \
             --output issue-comment.md
           cat issue-comment.md
-          gh issue comment "$ISSUE_NUMBER" --body-file issue-comment.md
+          gh issue comment "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --body-file issue-comment.md
           if [[ "$succeeded" == "true" && "$IS_PULL_REQUEST" != "true" ]]; then
-            gh issue close "$ISSUE_NUMBER" --reason completed
+            gh issue close "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --reason completed
           fi
